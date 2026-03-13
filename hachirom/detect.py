@@ -103,8 +103,22 @@ def _normalise(data: bytes, notes: list[str]) -> bytes:
     crc = zlib.crc32(rom32) & 0xFFFFFFFF
     if crc not in _CRC32_MAP:
         unscrambled = unscramble_034(rom32)
-        if (zlib.crc32(unscrambled) & 0xFFFFFFFF) in _CRC32_MAP:
+        crc_un = zlib.crc32(unscrambled) & 0xFFFFFFFF
+
+        if crc_un in _CRC32_MAP:
             notes.append("Auto-detected .034 scrambled file — unscrambled")
+            return unscrambled
+
+        # For tuned/edited ROMs neither CRC will be known.
+        # Use byte sum proximity: if unscrambling moves the sum significantly
+        # closer to any known variant target, the file was scrambled.
+        targets = [v.checksum.get("target", 0) for v in ALL_VARIANTS]
+        delta_raw = min(abs(sum(rom32)    - t) for t in targets)
+        delta_un  = min(abs(sum(unscrambled) - t) for t in targets)
+        if delta_un < delta_raw and (delta_raw - delta_un) > 10000:
+            notes.append(
+                f"Auto-detected .034 scrambled file — unscrambled "
+                f"(bytesum delta improved {delta_raw:,} → {delta_un:,})")
             return unscrambled
 
     return rom32
@@ -221,13 +235,20 @@ def detect(data: bytes) -> DetectionResult:
         return DetectionResult(v, sha256, crc32, original_size, "hash",
                                notes + [f"CRC32 match: {v.name} ({v.part_number})"])
 
-    # 2. Reset vector match
+    # 2. Exact byte sum match (checksum valid = unambiguous variant)
+    bytesum = sum(rom32)
+    for v in ALL_VARIANTS:
+        if bytesum == v.checksum.get("target", -1):
+            notes.append(f"Byte sum {bytesum:,} exactly matches {v.name} checksum target")
+            return DetectionResult(v, sha256, crc32, original_size, "checksum", notes)
+
+    # 3. Reset vector match
     if vec in _RESET_VEC_MAP:
         v = _RESET_VEC_MAP[vec]
         notes.append(f"Reset vector {vec[0]:02X} {vec[1]:02X} → {v.name}")
         return DetectionResult(v, sha256, crc32, original_size, "reset_vector", notes)
 
-    # 3. Structural scoring
+    # 4. Structural scoring
     scores = [(v, _score_variant(rom32, v)) for v in ALL_VARIANTS]
     scores.sort(key=lambda x: -x[1])
     best_v, best_score = scores[0]
@@ -244,7 +265,7 @@ def detect(data: bytes) -> DetectionResult:
             f"target={best_v.checksum.get('target', 0):,}")
         return DetectionResult(best_v, sha256, crc32, original_size, "heuristic", notes)
 
-    # 4. Unknown
+    # 5. Unknown
     guess = f"{best_v.name} (score {best_score})" if best_score > 0 else "none"
     notes.append(
         f"No confident match. Best guess: {guess}. "

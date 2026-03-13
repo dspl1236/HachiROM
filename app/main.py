@@ -618,6 +618,19 @@ _MAP_TIPS: dict[str, dict] = {
         ],
         "caution": None,
     },
+    "RPM Limit": {
+        "what":  "Sets the fuel cut rev limiter. The ECU cuts injectors when "
+                 "RPM exceeds this value. raw×25 = RPM.",
+        "tips": [
+            "Stock AAH and 7A: raw=254 → 6350 RPM.",
+            "Stage 1 tunes often raise this to raw=255 (6375 RPM).",
+            "This is a hard fuel cut — ignition is not retarded first.",
+            "Engine must be in good condition before raising the limit.",
+        ],
+        "caution": "Over-revving causes valve float, head stud stretch, and "
+                   "potential catastrophic engine damage. Verify your build "
+                   "can handle the RPM before raising this value.",
+    },
     "Decel Cutoff": {
         "what":  "The MAP pressure threshold below which the ECU cuts "
                  "injectors during deceleration (overrun), per RPM. "

@@ -189,6 +189,11 @@ _MAPS_266D = [
     MapDef("CL RPM Limit",          0x07E1,  1,  1,
            "Disable closed loop above this RPM. raw×25=RPM.", "RPM"),
 
+    MapDef("RPM Limit",           0x07D2,  1,  1,
+           "Rev limiter (fuel cut). raw×25=RPM. Stock=254 (6350 RPM). "
+           "Raise with caution.", "RPM",
+           decode=lambda v: v * 25,
+           encode=lambda v: max(0, min(255, round(v / 25)))),
     # ── Fuel cut / decel ────────────────────────────────────────────────────
     MapDef("Decel Cutoff",          0x0E30,  1, 16,
            "Injector decel fuel cut threshold per RPM. raw×0.3922=kPa.", "kPa"),
@@ -257,6 +262,11 @@ _MAPS_266B = [
     MapDef("Injection Scaler",      0x077E,  1,  1, "Global injector scaler.", "raw"),
     MapDef("CL RPM Limit",          0x07E1,  1,  1, "Disable CL above this RPM. raw×25=RPM.", "RPM"),
 
+    MapDef("RPM Limit",           0x07D2,  1,  1,
+           "Rev limiter (fuel cut). raw×25=RPM. Stock=254 (6350 RPM). "
+           "Raise with caution.", "RPM",
+           decode=lambda v: v * 25,
+           encode=lambda v: max(0, min(255, round(v / 25)))),
     # ── Fuel cut / decel ─────────────────────────────────────────────────────
     MapDef("Decel Cutoff",          0x0E30,  1, 16,
            "Decel fuel cut threshold per RPM. raw×0.3922=kPa.", "kPa"),
@@ -337,6 +347,11 @@ _MAPS_AAH = [
            "Global injector scaler. Stock=100. Raise for larger injectors.", "raw"),
     MapDef("CL Disable RPM",        0x07E1,  1,  1,
            "Disable closed loop above this RPM. raw×25=RPM.", "RPM"),
+    MapDef("RPM Limit",           0x07D2,  1,  1,
+           "Rev limiter (fuel cut). raw×25=RPM. Stock=254 (6350 RPM). "
+           "Raise with caution.", "RPM",
+           decode=lambda v: v * 25,
+           encode=lambda v: max(0, min(255, round(v / 25)))),
 
     # ── Fuel cut / decel ─────────────────────────────────────────────────────
     MapDef("Decel Cutoff",          0x0E30,  1, 16,
