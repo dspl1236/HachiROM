@@ -25,7 +25,9 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: HachiROM-Windows
-          path: dist/HachiROM.exe
+          path: |
+            dist/HachiROM-v*.exe
+            dist/exe_name.txt
 
   release:
     needs: [build-windows]
@@ -40,6 +42,10 @@ jobs:
           name: HachiROM-Windows
           path: dist/windows
 
+      - name: Read EXE name
+        id: exe
+        run: echo "name=$(cat dist/windows/exe_name.txt)" >> $GITHUB_OUTPUT
+
       - name: Delete existing latest tag and release
         run: |
           gh release delete latest --yes || true
@@ -49,11 +55,11 @@ jobs:
 
       - name: Create rolling latest release
         run: |
-          NOTES="Rolling release — updated automatically on every push to main.
+          NOTES="Rolling release — built automatically from main.
 
           Supports: 893906266D (7A Late) · 893906266B (7A Early) · 4A0906266 (AAH 12v V6)
 
-          Windows: HachiROM.exe — standalone, no install needed
+          Windows: ${{ steps.exe.outputs.name }} — standalone, no install needed
 
           macOS and Linux builds temporarily disabled pending Windows validation.
 
@@ -63,6 +69,6 @@ jobs:
             --title "HachiROM — latest build (Windows)" \
             --notes "$NOTES" \
             --prerelease \
-            dist/windows/HachiROM.exe
+            "dist/windows/${{ steps.exe.outputs.name }}"
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
