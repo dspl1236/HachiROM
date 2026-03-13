@@ -68,16 +68,14 @@ LOAD_AXIS_AAH   = [12.6,18.8,23.5,28.2,32.9,38.4,43.9,50.2,56.5,62.8,69.0,75.3,8
 #
 # Profile grouping
 # ────────────────
-#   Group A — stock housing, original or modern sensor element (60mm bore):
-#     stock_7a        Original Hitachi sensor in stock 50mm housing
-#     sensor_1_8t     Modern Bosch 1.8T element in stock 50mm housing (drop-in)
+#   Group A — 7A Hitachi sensor (4-pin, CO pot integrated):
+#     stock_7a          Original sensor in 50mm housing — stock, no changes
+#     aah_v6_housing    7A sensor transplanted into 74mm AAH V6 housing
+#                       (plug-and-play CO pot, ROM patch required)
 #
-#   Group B — VAG large housing, 7A sensor transplant (74mm bore, plug-and-play):
-#     aah_v6_housing  7A sensor unit in AAH 2.8L V6 housing — retains CO pot
-#
-#   Group C — modern aftermarket housings, 3-wire sensor (no CO pot):
-#     vr6_tt225       MK4 VR6 / Audi TT 225 housing — 69.85mm bore
-#     s4_82mm         B6 S4 4.2L V8 housing — 82mm bore (estimated axis)
+#   Group B — Bosch 1.8T sensor (3-wire, no CO pot — external pot required):
+#     sensor_1_8t_57    1.8T sensor in 57mm 1.8T housing
+#     sensor_1_8t_vr6   1.8T sensor in 69.85mm VR6/TT225 housing
 #
 # CO pot — detailed wiring (source: 20v-sauger-tuning.de)
 #   The stock 7A MAF (054 133 471 / A) is 4-pin:
@@ -114,103 +112,109 @@ MAF_AXIS_ADDR_FUEL   = 0x05D0   # fuel map MAF axis location in ROM
 MAF_AXIS_ADDR_TIMING = 0x05E0   # timing map MAF axis location (identical copy)
 MAF_AXIS_LEN         = 16       # 16 breakpoints
 
-# ── Group A — stock 50mm housing ────────────────────────────────────────────
+# Sensor / housing compatibility
+# ─────────────────────────────
+# Two sensor elements are supported:
+#
+#   7A Hitachi (054 133 471 / A)  — 4-pin, integrated CO pot
+#     Fits: 50mm stock housing, 74mm AAH V6 housing (transplant mod)
+#     Does NOT fit: 1.8T or VR6/TT225 housings (different internal geometry)
+#
+#   Bosch 1.8T (0280218114)       — 3-pin, no CO pot
+#     Fits: 57mm 1.8T housing, 69.85mm VR6/TT225 housing
+#     Does NOT fit: 50mm or 74mm VAG housings (different internal geometry)
+#
+# This gives exactly four valid hardware combinations:
+#
+#   stock_7a          7A sensor  + 50mm housing   — stock, CO pot retained
+#   aah_v6_housing    7A sensor  + 74mm AAH housing — CO pot retained, ROM patch needed
+#   sensor_1_8t_57    1.8T sensor + 57mm 1.8T housing  — 3-wire, external CO pot
+#   sensor_1_8t_vr6   1.8T sensor + 69.85mm VR6 housing — 3-wire, external CO pot
+
+# ── Group A — 7A Hitachi sensor ─────────────────────────────────────────────
 
 # Stock axis — original Hitachi sensor in 50mm housing (054 133 471 / A)
-# Confirmed from physical ROM read 893906266D_MMS05C_physical.bin
-# Housing bore: 50mm, bypass: 8mm, total flow area: 2013.76mm²
-# Sensor capacity: 480 kg/h
+# Confirmed from physical ROM read: 893906266D_MMS05C_physical.bin
+# Housing bore: 50mm, bypass: 8mm, total flow area: 2013.76 mm²
+# Sensor capacity: ~480 kg/h
 MAF_AXIS_STOCK_7A   = [5, 10, 20, 30, 50, 62, 75, 87, 116, 131, 145, 160, 225, 243, 255, 255]
 
-# Bosch 1.8T sensor element (0280218114) in the stock 50mm housing
-# Drop-in replacement: same housing dimensions, new sensor element only.
-# Recalibrated for a higher measurement range — sensor saturates later.
-# Derived from published Bosch 1.8T transfer function data.
-# NOTE: axis values should be verified against a wideband on a dyno.
-# At 100 g/s reads ~1.47V vs stock ~1.71V — ECU axis must be rescaled.
-MAF_AXIS_1_8T       = [4, 6, 14, 23, 41, 51, 64, 75, 102, 116, 130, 145, 196, 214, 237, 237]
-
-# ── Group B — AAH V6 74mm housing, 7A sensor transplant ─────────────────────
-
-# 7A sensor unit (054 133 471 A) swapped into AAH 2.8L V6 housing (078 133 471 no-suffix).
-# Source: 20v-sauger-tuning.de, measured housing dimensions:
-#   AAH housing bore: 74mm, bypass: 10mm, rib: 19×74mm, total flow area: 2972.53mm²
+# 7A sensor transplanted into AAH 2.8L V6 housing (078 133 471 no-suffix)
+# Source: 20v-sauger-tuning.de — measured housing dimensions:
+#   Housing bore: 74mm, bypass: 10mm, rib: 19×74mm, total flow area: 2972.53 mm²
 #   Velocity ratio at same airflow: 2013.76 / 2972.53 = 0.6775
-#   King's law voltage scaling: sqrt(0.6775) = 0.8231
-# PLUG-AND-PLAY: retains 4-pin connector and CO pot — no wiring changes needed.
-# REQUIRES this ROM patch — without it the ECU under-reads airflow and runs lean.
-# DO NOT remove the centre rib from the AAH housing — destroys bypass ratio, will run lean.
-# Housing capacity: 400 kg/h (sufficient for NA/mild boost).
+#   King's law voltage correction: sqrt(0.6775) = 0.8231
+# PLUG-AND-PLAY: 4-pin connector and CO pot are retained — no wiring changes.
+# REQUIRES this ROM patch — ECU under-reads airflow without it and runs lean.
+# DO NOT remove the centre rib from the AAH housing — destroys bypass ratio.
+# IMPORTANT part number: use 078 133 471 (no suffix only).
+#   078 133 471 A / AX — mirrored holes, different depth — INCOMPATIBLE.
+#   054 133 471 A (with Index A) fits directly; without Index A needs shim washers.
 MAF_AXIS_AAH_V6     = [4, 8, 16, 25, 41, 51, 62, 72, 95, 108, 119, 132, 185, 200, 255, 255]
 
-# ── Group C — modern aftermarket housings, 3-wire (no CO pot) ───────────────
+# ── Group B — Bosch 1.8T sensor (0280218114) ────────────────────────────────
+# 3-wire sensor — no integrated CO pot.
+# Requires external pot wiring on ECU pin 4 (see CO pot note in header comment).
 
-# VR6 / TT 225 axis — Bosch 0280218042 / 0280218116 in 69.85mm (2.75") housing
-# 3-wire sensor — requires external pot (1kΩ + 20kΩ) on pin 4.
-# Derived from published sensor transfer function data.
-# Suitable for K04 / hybrid turbo setups, approx. 250-300 hp.
-# Housing: MK4 VR6 / Audi TT 225 — 2.75" ID / 3.0" OD
-MAF_AXIS_VR6_TT225  = [4, 8, 16, 27, 46, 56, 69, 81, 107, 122, 137, 152, 201, 219, 242, 242]
+# 1.8T sensor in 57mm 1.8T housing
+# Bore: 57mm, flow area: 2551.8 mm²
+# Axis derived from published 1.8T transfer function data for this housing.
+# Compared to VR6/TT225 housing: smaller bore → higher air velocity → higher voltage
+#   Velocity ratio (57mm vs 69.85mm): 3832.0 / 2551.8 = 1.5017
+#   King's law voltage scale: sqrt(1.5017) = 1.2254
+# NOTE: verify against a wideband before road use.
+MAF_AXIS_1_8T_57    = [5, 10, 20, 33, 56, 69, 85, 99, 131, 150, 168, 186, 246, 255, 255, 255]
 
-# B6 S4 4.2 V8 axis — Bosch 0280218076 in 82mm (3.23") housing
-# 3-wire sensor — requires external pot on pin 4.
-# For large turbo / high-flow applications, approx. 300+ hp.
-# Housing: B6 S4 4.2L — 3.2" ID / 3.6" OD.  Requires adapter to 60mm MAF pipe.
-# NOTE: axis values are estimates derived from scaling the VR6 transfer function
-# by the bore area ratio (69.85²/82²).  Verify on a dyno before road use.
-MAF_AXIS_S4_82MM    = [3, 6, 12, 21, 37, 46, 56, 66, 88, 101, 113, 126, 168, 183, 203, 203]
+# 1.8T sensor in VR6 / TT225 housing (69.85mm / 2.75")
+# Bore: 69.85mm, flow area: 3832.0 mm²
+# Same sensor element as above — larger housing bore → lower voltage at same airflow.
+# Axis derived from published 1.8T / VR6 transfer function data.
+# Housing: MK4 VR6 / Audi TT 225 — Bosch 0280218042 / 0280218116
+# Suitable for K04 / hybrid turbo setups, ~250–300 hp.
+# NOTE: verify against a wideband before road use.
+MAF_AXIS_1_8T_VR6   = [4, 8, 16, 27, 46, 56, 69, 81, 107, 122, 137, 152, 201, 219, 242, 242]
 
-# Human-readable sensor profiles — ordered by ascending housing bore size
+# Human-readable sensor profiles — ordered by sensor then bore size
 MAF_PROFILES: dict = {
-    # ── Group A — stock 50mm housing ──────────────────────────────────────
-    "stock_7a":       {
-        "label":      "Stock 7A  (50mm)",
-        "group":      "Stock housing (50mm)",
-        "axis":        MAF_AXIS_STOCK_7A,
-        "housing":    "Original Hitachi 054 133 471 / A — 50mm bore, 480 kg/h",
-        "hp_note":    "~170 hp limit",
-        "co_pot":      True,
-        "plug_play":   True,
+    # ── Group A — 7A Hitachi sensor ───────────────────────────────────────
+    "stock_7a":         {
+        "label":        "Stock 7A  (50mm)",
+        "group":        "7A Hitachi sensor",
+        "axis":          MAF_AXIS_STOCK_7A,
+        "housing":      "Hitachi 054 133 471 / A — 50mm bore",
+        "hp_note":      "Stock — ~170 hp limit",
+        "co_pot":        True,
+        "plug_play":     True,
     },
-    "sensor_1_8t":    {
-        "label":      "1.8T sensor  (50mm housing)",
-        "group":      "Stock housing (50mm)",
-        "axis":        MAF_AXIS_1_8T,
-        "housing":    "Bosch 0280218114 element in stock 50mm housing — sensor swap only",
-        "hp_note":    "Higher measurement range, recalibrated element",
-        "co_pot":      False,
-        "plug_play":   False,
-        "note":       "Axis derived from published 1.8T transfer function — verify on dyno.",
+    "aah_v6_housing":   {
+        "label":        "AAH V6 housing + 7A sensor  (74mm)",
+        "group":        "7A Hitachi sensor",
+        "axis":          MAF_AXIS_AAH_V6,
+        "housing":      "078 133 471 (no suffix) housing + 054 133 471 A sensor unit",
+        "hp_note":      "NA / mild boost — CO pot retained, ROM patch required",
+        "co_pot":        True,
+        "plug_play":     True,
     },
-    # ── Group B — AAH V6 74mm housing, plug-and-play ──────────────────────
-    "aah_v6_housing": {
-        "label":      "AAH V6 housing + 7A sensor  (74mm)",
-        "group":      "V6 housing (74mm) — plug-and-play",
-        "axis":        MAF_AXIS_AAH_V6,
-        "housing":    "078 133 471 (no suffix) housing + 054 133 471 A sensor unit",
-        "hp_note":    "NA / mild boost — 400 kg/h housing, CO pot retained",
-        "co_pot":      True,
-        "plug_play":   True,
+    # ── Group B — Bosch 1.8T sensor ───────────────────────────────────────
+    "sensor_1_8t_57":   {
+        "label":        "1.8T sensor + 1.8T housing  (57mm)",
+        "group":        "Bosch 1.8T sensor  (3-wire — external CO pot required)",
+        "axis":          MAF_AXIS_1_8T_57,
+        "housing":      "Stock 1.8T MAF housing — Bosch 0280218114",
+        "hp_note":      "Mild–moderate power upgrade",
+        "co_pot":        False,
+        "plug_play":     False,
+        "note":         "Axis derived from transfer function data — verify on dyno.",
     },
-    # ── Group C — modern aftermarket housings ─────────────────────────────
-    "vr6_tt225":      {
-        "label":      "VR6 / TT225  (69.85mm / 2.75\")",
-        "group":      "Aftermarket (3-wire, no CO pot)",
-        "axis":        MAF_AXIS_VR6_TT225,
-        "housing":    "MK4 VR6 / Audi TT 225 — Bosch 0280218042 / 0280218116",
-        "hp_note":    "~250-300 hp — K04 / hybrid turbo",
-        "co_pot":      False,
-        "plug_play":   False,
-    },
-    "s4_82mm":        {
-        "label":      "B6 S4 4.2  (82mm / 3.23\")",
-        "group":      "Aftermarket (3-wire, no CO pot)",
-        "axis":        MAF_AXIS_S4_82MM,
-        "housing":    "B6/B7 S4 4.2L V8 — Bosch 0280218076 — needs 60mm adapter",
-        "hp_note":    "300+ hp — large turbo builds  ⚠ estimated axis",
-        "co_pot":      False,
-        "plug_play":   False,
-        "note":       "Axis is estimated from bore area scaling — verify on dyno.",
+    "sensor_1_8t_vr6":  {
+        "label":        "1.8T sensor + VR6/TT225 housing  (69.85mm)",
+        "group":        "Bosch 1.8T sensor  (3-wire — external CO pot required)",
+        "axis":          MAF_AXIS_1_8T_VR6,
+        "housing":      "MK4 VR6 / Audi TT 225 housing — Bosch 0280218042 / 0280218116",
+        "hp_note":      "~250–300 hp — K04 / hybrid turbo",
+        "co_pot":        False,
+        "plug_play":     False,
+        "note":         "Axis derived from transfer function data — verify on dyno.",
     },
 }
 
