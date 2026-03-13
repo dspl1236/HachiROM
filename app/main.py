@@ -801,14 +801,30 @@ _MAP_TIPS: dict[str, dict] = {
         "caution": None,
     },
     "CL Disable RPM": {
-        "what":  "A single RPM value above which closed-loop O2 correction "
-                 "is always disabled regardless of load. Raw × 25 = RPM.",
+        "what":  "The RPM threshold above which the ECU permanently disables "
+                 "closed-loop O2 (lambda) correction for that operating cycle. "
+                 "Below this RPM, the ECU trims fuel based on the O2 sensor. "
+                 "Above it, the fuel map values are used exactly as written. "
+                 "Raw × 25 = RPM.",
         "tips": [
-            "Stock is typically around 3000-4000 RPM.",
-            "On a tuned engine, lowering this ensures the fuel map is "
-            "followed precisely at high RPM.",
+            "Stock AAH: raw=244 → 6100 RPM. The ECU is in open-loop for "
+            "almost the entire rev range — the O2 sensor barely matters "
+            "at high load.",
+            "This value is unchanged between stock and Stage 1 AAH tunes "
+            "(both raw=244), which makes sense: the Stage 1 tune remapped "
+            "the entire fuel map and wants those values followed precisely.",
+            "If you are running a wideband O2 and logging, you can raise "
+            "this value to keep CL active higher in the rev range — useful "
+            "while iterating on idle and cruise fuelling before a final burn.",
+            "On a built engine with a big cam and lumpy idle, lower this to "
+            "around 1500 RPM (raw≈60) to prevent the O2 sensor from fighting "
+            "your idle enrichment cells.",
+            "CL correction range is limited (±a few percent). This value "
+            "cannot rescue a badly wrong fuel map — fix the map first.",
         ],
-        "caution": None,
+        "caution": "Leaving CL active at high RPM on a tuned engine can cause "
+                   "the ECU to trim away your WOT enrichment. Always verify "
+                   "your wideband AFRs at full load in open-loop.",
     },
     "RPM Limit": {
         "what":  "The rev limiter — ECU cuts injectors above this RPM. "
@@ -843,18 +859,31 @@ _MAP_TIPS: dict[str, dict] = {
         "caution": None,
     },
     "Injection Scaler": {
-        "what":  "A single global scalar applied to all injector pulse widths. "
-                 "Stock = 100. Increasing this richens the entire fuel map "
-                 "proportionally — used for larger injectors.",
+        "what":  "A global multiplier on all injector pulse widths. "
+                 "Intended for injector swaps: if you fit larger injectors, "
+                 "lower this value so the ECU delivers the same fuel quantity "
+                 "per map unit as before. Stock 7A/AAH = 100 (stock injectors). "
+                 "Formula: new_scaler = 100 × (stock_cc / new_injector_cc).",
         "tips": [
-            "Formula: new_scaler = old_scaler × (new_injector_cc / stock_cc).",
-            "Stock 7A injectors are ~205 cc/min.",
-            "After changing this, the whole fuel map will need retuning.",
-            "Do not use this as a coarse idle richness trim — edit the "
-            "fuel map cells directly instead.",
+            "Stock 7A and AAH injectors are ~205 cc/min.  Example: fitting "
+            "410 cc/min injectors → set scaler to 50.",
+            "The MMS Stage 1 AAH tune uses scaler=50 with the fuel map values "
+            "approximately doubled — this is a resolution trick, not a sign "
+            "of bigger injectors. Halving the scaler and doubling the map gives "
+            "finer 8-bit control over enrichment. Net WOT fuelling is richer "
+            "(lambda ~0.69–0.87 vs stock ~1.0), but the scaler change alone "
+            "tells you nothing about injector size.",
+            "Do not change this value without also rescaling the entire fuel "
+            "map. The two must always be changed together.",
+            "Do not use this as a coarse richness trim — edit the fuel map "
+            "cells directly instead.",
+            "After any injector swap: new_scaler × new_cc ≈ 100 × 205. "
+            "Start lean and richen the map; never start rich and lean down.",
         ],
-        "caution": "Setting this too high will flood the engine. Change in "
-                   "small steps with the fuel map leaned out first.",
+        "caution": "Changing the scaler without rescaling the fuel map will "
+                   "cause severe over- or under-fuelling across the entire "
+                   "rev range. If in doubt, leave it at stock (100) and tune "
+                   "using the fuel map only.",
     },
     "MAF Linearization": {
         "what":  "266B only. Lookup table that converts raw MAF sensor counts "
