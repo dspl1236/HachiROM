@@ -88,8 +88,7 @@ class ChangedCellDelegate(QStyledItemDelegate):
 # ---------------------------------------------------------------------------
 
 class SaveConfirmDialog(QDialog):
-    def __init__(self, data: bytes, variant, path: str,
-                 mode: str = "bin", parent=None):
+    def __init__(self, data: bytes, variant, path: str, parent=None):
         super().__init__(parent)
         self.setWindowTitle("Confirm Save")
         self.setMinimumWidth(520)
@@ -143,11 +142,8 @@ class SaveConfirmDialog(QDialog):
         fl = QVBoxLayout(file_box)
         fl.setSpacing(3)
 
-        size_str = ("65,536 bytes (64 KB)" if mode == "27c512"
-                    else f"{len(data):,} bytes (32 KB)")
-        note_str = ("ROM mirrored into both 32KB halves — burn in 27C512 mode"
-                    if mode == "27c512"
-                    else "Native 32KB ROM — Teensy SD card / emulator")
+        size_str = f"{len(data):,} bytes (32 KB)"
+        note_str = "Native 32KB ROM — Teensy SD card / emulator"
 
         def fl_row(label, value):
             lbl = QLabel(f"<b style='color:#888'>{label}&nbsp;&nbsp;</b>"
@@ -1133,56 +1129,66 @@ class MainWindow(QMainWindow):
             return hr.apply_checksum(raw, self.current_variant)
         return bytearray(raw)
 
-    def _pre_save(self, mode: str):
+    def save_rom(self):
+        """Save 32KB .bin — checksum corrected. Shows confirm dialog."""
         if not self.current_data:
             QMessageBox.warning(self, "HachiROM", "No ROM loaded.")
-            return None, None
+            return
 
         base    = Path(self.current_path).stem if self.current_path else "rom"
         parent  = str(Path(self.current_path).parent) if self.current_path else ""
-        suffix  = "_27C512.bin" if mode == "27c512" else "_edited.bin"
-        default = str(Path(parent) / (base + suffix)) if parent else base + suffix
-
+        default = str(Path(parent) / (base + "_edited.bin")) if parent else base + "_edited.bin"
         path, _ = QFileDialog.getSaveFileName(
-            self, "Save ROM", default,
+            self, "Save 32KB ROM", default,
             "Binary ROM Files (*.bin);;All Files (*)")
         if not path:
-            return None, None
+            return
 
         self._collect_edits()
 
+        # Checksum confirm dialog — only for 32KB saves
         if self.current_variant:
             dlg = SaveConfirmDialog(
                 bytes(self.current_data[:32768]),
-                self.current_variant, path, mode=mode, parent=self)
+                self.current_variant, path, parent=self)
             if dlg.exec_() != QDialog.Accepted:
-                return None, None
+                return
 
-        return path, self._corrected_32k()
-
-    def save_rom(self):
-        path, rom32 = self._pre_save("bin")
-        if path is None: return
         try:
+            rom32 = self._corrected_32k()
             hr.save_bin(bytes(rom32), path)
             self.statusBar().showMessage(f"Saved → {Path(path).name}")
         except Exception as e:
             QMessageBox.critical(self, "Save Error", str(e))
 
     def save_27c512(self):
-        path, rom32 = self._pre_save("27c512")
-        if path is None: return
+        """Save 64KB 27C512 image — ROM mirrored, NO checksum correction.
+        The checksum is already correct in the 32KB data; the 27C512 format
+        is just a carrier for EPROM programmers and does not need modification."""
+        if not self.current_data:
+            QMessageBox.warning(self, "HachiROM", "No ROM loaded.")
+            return
+
+        base    = Path(self.current_path).stem if self.current_path else "rom"
+        parent  = str(Path(self.current_path).parent) if self.current_path else ""
+        default = str(Path(parent) / (base + "_27C512.bin")) if parent else base + "_27C512.bin"
+        path, _ = QFileDialog.getSaveFileName(
+            self, "Save 27C512 Image", default,
+            "Binary ROM Files (*.bin);;All Files (*)")
+        if not path:
+            return
+
+        self._collect_edits()
+
         try:
-            # Mirror ROM into both halves.
-            # The Hitachi ECU reads from A15=1 (upper 32KB), so either half works
-            # electrically, but mirroring is safer:
-            #   - Programmer verify passes on both halves
-            #   - If accidentally burned in 27C256 mode (32KB only), chip still works
-            #   - Matches what OEM 27C256 chips contain (pin-adapted to 27C512 socket)
-            image = bytes(rom32) + bytes(rom32)
+            # Mirror raw edited ROM into both halves — no checksum applied here.
+            # Burn the 32KB .bin first (which corrects the checksum), then use
+            # Save 27C512 if you need the EPROM image.
+            rom32 = bytes(self.current_data[:32768])
+            image = rom32 + rom32
             hr.save_bin(image, path)
             self.statusBar().showMessage(
-                f"Saved 27C512 → {Path(path).name}  (64 KB, mirrored)")
+                f"Saved 27C512 → {Path(path).name}  (64 KB, mirrored, raw — use Save .bin for checksum fix)")
         except Exception as e:
             QMessageBox.critical(self, "Save Error", str(e))
 
