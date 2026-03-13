@@ -53,6 +53,77 @@ LOAD_AXIS_AAH   = [12.6,18.8,23.5,28.2,32.9,38.4,43.9,50.2,56.5,62.8,69.0,75.3,8
 
 
 # ---------------------------------------------------------------------------
+# MAF hardware patch tables — 266D only
+# The 266D fuel/timing maps are indexed by MAF ADC counts (0-255 = 0-5V).
+# These tables are stored at TWO locations in the ROM:
+#   0x05D0 — fuel map MAF axis   (16 bytes)
+#   0x05E0 — timing map MAF axis (16 bytes, identical copy)
+# Swapping the sensor housing requires rewriting both locations with the new
+# sensor's transfer function in ADC counts so the ECU interpolates correctly.
+#
+# Airflow reference points (g/s) for each of the 16 axis breakpoints:
+#   [0, 5, 15, 25, 45, 60, 80, 100, 140, 165, 190, 220, 280, 295, 300, 300]
+#
+# CO pot note:
+#   Stock 7A MAF (Bosch 0280213016) is 5-wire.  Wire 4 is a CO trim
+#   potentiometer — a separate ECU input that applies a small lambda offset
+#   for mixture fine-tuning without opening the ECU.
+#   The VR6/TT225 sensor (Bosch 0280218042/0280218116) is 4-wire — no CO pot.
+#   Hardware fix: bridge the CO pot ECU pin to 2.5 V via a 10 kΩ / 10 kΩ
+#   voltage divider from the ECU 5 V reference.  This holds the trim at the
+#   neutral mid-point.  Do NOT leave pin 4 floating — the ECU ADC will read
+#   noise and may trim the mixture unpredictably.
+# ---------------------------------------------------------------------------
+
+MAF_AXIS_ADDR_FUEL   = 0x05D0   # fuel map MAF axis location in ROM
+MAF_AXIS_ADDR_TIMING = 0x05E0   # timing map MAF axis location (identical copy)
+MAF_AXIS_LEN         = 16       # 16 breakpoints
+
+# Stock axis — Bosch 0280213016 in original 60mm (2.36") housing
+# Confirmed from physical ROM read 893906266D_MMS05C_physical.bin
+MAF_AXIS_STOCK_7A = [5, 10, 20, 30, 50, 62, 75, 87, 116, 131, 145, 160, 225, 243, 255, 255]
+
+# VR6 / TT 225 axis — Bosch 0280218042 / 0280218116 in 69.85mm (2.75") housing
+# Derived from published sensor transfer function data; same airflow breakpoints
+# as stock but lower ADC counts because the larger bore reduces air velocity.
+# Suitable for K04 / hybrid turbo setups, approx. 250-300 hp.
+# Housing: MK4 VR6 / Audi TT 225 — 2.75" ID / 3.0" OD
+MAF_AXIS_VR6_TT225  = [4, 8, 16, 27, 46, 56, 69, 81, 107, 122, 137, 152, 201, 219, 242, 242]
+
+# B6 S4 4.2 V8 axis — Bosch 0280218076 in 82mm (3.23") housing
+# For large turbo / high-flow applications, approx. 300+ hp.
+# Housing: B6 S4 4.2L — 3.2" ID / 3.6" OD.  Requires adapter to 60mm MAF pipe.
+# NOTE: axis values are estimates derived from scaling the VR6 transfer function
+# by the bore area ratio (69.85²/82²).  Verify on a dyno before road use.
+MAF_AXIS_S4_82MM    = [3, 6, 12, 21, 37, 46, 56, 66, 88, 101, 113, 126, 168, 183, 203, 203]
+
+# Human-readable sensor profiles keyed by profile name
+MAF_PROFILES: dict = {
+    "stock_7a":   {
+        "label":   "Stock 7A  (60mm / 2.36\")",
+        "axis":    MAF_AXIS_STOCK_7A,
+        "housing": "Original Bosch 0280213016 — stock 60mm housing",
+        "hp_note": "~170 hp limit",
+        "co_pot":  True,
+    },
+    "vr6_tt225":  {
+        "label":   "VR6 / TT225  (69.85mm / 2.75\")",
+        "axis":    MAF_AXIS_VR6_TT225,
+        "housing": "MK4 VR6 / Audi TT 225 — Bosch 0280218042 / 0280218116",
+        "hp_note": "~250-300 hp — recommended for K04 / hybrid turbo",
+        "co_pot":  False,
+    },
+    "s4_82mm":    {
+        "label":   "B6 S4 4.2  (82mm / 3.23\")",
+        "axis":    MAF_AXIS_S4_82MM,
+        "housing": "B6/B7 S4 4.2L V8 — Bosch 0280218076 — needs 60mm adapter",
+        "hp_note": "300+ hp — large turbo builds",
+        "co_pot":  False,
+    },
+}
+
+
+# ---------------------------------------------------------------------------
 # Display formula helpers
 # ---------------------------------------------------------------------------
 

@@ -26,7 +26,8 @@ from .detect import detect, load_bin, save_bin, load_bin_normalised, DetectionRe
 from .maps   import (read_map, read_map_decoded, write_map, write_map_encoded,
                      read_axis, read_scalar, write_scalar,
                      compute_sum, verify_checksum, apply_checksum,
-                     compare_roms, diff_summary, DiffByte)
+                     compare_roms, diff_summary, DiffByte,
+                     detect_maf_patch, apply_maf_patch)
 from .roms   import (ROMVariant, MapDef, ALL_VARIANTS,
                      ROM_266D, ROM_266B, ROM_AAH,
                      unscramble_034, unscramble_byte,
@@ -35,7 +36,9 @@ from .roms   import (ROMVariant, MapDef, ALL_VARIANTS,
                      timing_decode, timing_encode,
                      RPM_AXIS_266D, RPM_AXIS_266B, TIMING_RPM_AXIS,
                      LOAD_AXIS, RPM_AXIS_AAH, LOAD_AXIS_AAH,
-                     CHECKSUM_PARAMS)
+                     CHECKSUM_PARAMS,
+                     MAF_PROFILES, MAF_AXIS_STOCK_7A, MAF_AXIS_VR6_TT225,
+                     MAF_AXIS_S4_82MM, MAF_AXIS_ADDR_FUEL, MAF_AXIS_ADDR_TIMING)
 
 __version__ = "0.4.0"
 
@@ -45,6 +48,7 @@ __all__ = [
     "read_axis", "read_scalar", "write_scalar",
     "compute_sum", "verify_checksum", "apply_checksum",
     "compare_roms", "diff_summary", "DiffByte",
+    "detect_maf_patch", "apply_maf_patch",
     "ROMVariant", "MapDef", "ALL_VARIANTS",
     "ROM_266D", "ROM_266B", "ROM_AAH",
     "unscramble_034", "unscramble_byte",
@@ -54,4 +58,6 @@ __all__ = [
     "RPM_AXIS_266D", "RPM_AXIS_266B", "TIMING_RPM_AXIS",
     "LOAD_AXIS", "RPM_AXIS_AAH", "LOAD_AXIS_AAH",
     "CHECKSUM_PARAMS",
+    "MAF_PROFILES", "MAF_AXIS_STOCK_7A", "MAF_AXIS_VR6_TT225",
+    "MAF_AXIS_S4_82MM", "MAF_AXIS_ADDR_FUEL", "MAF_AXIS_ADDR_TIMING",
 ]

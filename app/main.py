@@ -190,6 +190,211 @@ class SaveConfirmDialog(QDialog):
 
 
 # ---------------------------------------------------------------------------
+# MAF hardware patch dialog
+# ---------------------------------------------------------------------------
+
+class MafPatchDialog(QDialog):
+    """
+    Dialog for selecting and applying a MAF sensor housing swap patch (266D only).
+
+    Shows the currently detected sensor profile, lets the user pick a target
+    profile, explains the hardware changes required, and writes the new MAF
+    axis tables into the in-memory ROM snapshot on confirmation.
+
+    The caller is responsible for:
+      - Only showing this dialog when current_variant.version_key == "266D"
+      - Passing the live rom_snapshot bytes
+      - Calling apply_maf_patch() on the returned profile key then reloading
+    """
+
+    # Emitted with the chosen profile_key when the user clicks Apply
+    patch_requested = pyqtSignal(str)
+
+    def __init__(self, rom_data: bytes, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("MAF Sensor Patch — 266D")
+        self.setMinimumWidth(560)
+        self.setModal(True)
+
+        current_profile = hr.detect_maf_patch(rom_data)
+
+        layout = QVBoxLayout(self)
+        layout.setSpacing(10)
+
+        # ── Current state banner ────────────────────────────────────────────
+        profile_info = hr.MAF_PROFILES.get(current_profile, {})
+        if current_profile == "unknown":
+            banner_colour = "#ff9900"
+            banner_text   = "⚠  Unknown MAF axis — ROM may be custom-tuned"
+        elif current_profile == "inconsistent":
+            banner_colour = "#ff4444"
+            banner_text   = "✗  Inconsistent MAF axes — fuel and timing copies differ"
+        else:
+            banner_colour = "#2dff6e"
+            banner_text   = f"✓  {profile_info.get('label', current_profile)}"
+
+        banner = QFrame()
+        banner.setStyleSheet(
+            f"background:#111; border:1px solid {banner_colour}; "
+            f"padding:8px; border-radius:3px;")
+        bl = QVBoxLayout(banner)
+        bl.setSpacing(3)
+        bl.addWidget(QLabel(
+            f"<b style='color:#888'>Current sensor&nbsp;&nbsp;</b>"
+            f"<span style='color:{banner_colour}'>{banner_text}</span>",
+            textFormat=Qt.RichText))
+        if current_profile not in ("unknown", "inconsistent"):
+            bl.addWidget(QLabel(
+                f"<span style='color:#666; font-size:11px;'>"
+                f"{profile_info.get('housing', '')} — "
+                f"{profile_info.get('hp_note', '')}</span>",
+                textFormat=Qt.RichText))
+        layout.addWidget(QLabel("<b>Detected in ROM</b>", styleSheet="color:#aaa;"))
+        layout.addWidget(banner)
+
+        # ── Sensor selection ────────────────────────────────────────────────
+        layout.addWidget(QLabel("<b>Apply sensor patch</b>", styleSheet="color:#aaa;"))
+
+        self._buttons: dict[str, QRadioButton] = {}
+        btn_group = QButtonGroup(self)
+
+        for key, p in hr.MAF_PROFILES.items():
+            row = QFrame()
+            row.setStyleSheet(
+                "background:#1a1a1a; border:1px solid #333; "
+                "padding:6px; border-radius:3px;")
+            rl = QHBoxLayout(row)
+            rl.setContentsMargins(4, 2, 4, 2)
+
+            rb = QRadioButton(p["label"])
+            rb.setStyleSheet("color:#d4d4d4; font-weight:bold;")
+            if key == current_profile:
+                rb.setChecked(True)
+            btn_group.addButton(rb)
+            self._buttons[key] = rb
+
+            detail = QLabel(
+                f"<span style='color:#666; font-size:11px;'>"
+                f"{p['housing']}<br>"
+                f"<b style='color:#888'>{p['hp_note']}</b></span>",
+                textFormat=Qt.RichText)
+            detail.setWordWrap(True)
+
+            # CO pot indicator
+            if p["co_pot"]:
+                co_lbl = QLabel("5-wire (CO pot)")
+                co_lbl.setStyleSheet(
+                    "color:#888; font-size:10px; background:#222; "
+                    "border:1px solid #444; padding:1px 4px; border-radius:2px;")
+            else:
+                co_lbl = QLabel("4-wire  ⚠ bridge pin 4")
+                co_lbl.setStyleSheet(
+                    "color:#ff9900; font-size:10px; background:#2a1a00; "
+                    "border:1px solid #664400; padding:1px 4px; border-radius:2px;")
+            co_lbl.setToolTip(
+                "Stock 7A MAF is 5-wire — wire 4 is the CO trim pot (lambda offset).\n"
+                "Replacement sensors are 4-wire — no CO pot wire.\n"
+                "Hardware fix: connect a 10kΩ/10kΩ voltage divider between\n"
+                "ECU 5V ref and GND; wire midpoint (2.5V) to ECU pin 4.\n"
+                "Do NOT leave pin 4 floating — the ECU will trim the mixture.")
+
+            rl.addWidget(rb)
+            rl.addWidget(detail, 1)
+            rl.addWidget(co_lbl)
+            layout.addWidget(row)
+
+        # If none of the known profiles is selected (unknown/inconsistent), default to stock
+        if not any(rb.isChecked() for rb in self._buttons.values()):
+            self._buttons["stock_7a"].setChecked(True)
+
+        # ── CO pot warning box ───────────────────────────────────────────────
+        co_box = QFrame()
+        co_box.setStyleSheet(
+            "background:#1a1200; border:1px solid #664400; "
+            "padding:8px; border-radius:3px;")
+        co_lay = QVBoxLayout(co_box)
+        co_lay.setSpacing(2)
+        co_lay.addWidget(QLabel(
+            "<b style='color:#ff9900'>⚠  CO pot / wire 4 — hardware action required</b>",
+            textFormat=Qt.RichText))
+        co_lay.addWidget(QLabel(
+            "<span style='color:#aaa; font-size:11px;'>"
+            "The stock 7A MAF has a 5th wire (CO trim pot) that feeds a separate ECU ADC "
+            "input.  VR6/TT225 and S4 sensors are 4-wire — this pin will be open.<br>"
+            "<b>Fix:</b> solder a 10 kΩ resistor from ECU 5 V ref to pin 4, and another "
+            "10 kΩ from pin 4 to sensor GND.  This holds the trim at neutral (2.5 V)."
+            "</span>",
+            textFormat=Qt.RichText))
+        co_box.setVisible(False)   # shown/hidden based on selection
+        layout.addWidget(co_box)
+        self._co_box = co_box
+
+        # Update CO warning visibility when selection changes
+        for key, rb in self._buttons.items():
+            rb.toggled.connect(lambda checked, k=key: self._on_profile_changed(k, checked))
+
+        # Initial state
+        for key, rb in self._buttons.items():
+            if rb.isChecked():
+                self._on_profile_changed(key, True)
+
+        # ── Patch scope note ─────────────────────────────────────────────────
+        scope = QLabel(
+            "<span style='color:#555; font-size:10px;'>"
+            "Patch rewrites MAF axis breakpoints at 0x05D0 (fuel) and 0x05E0 (timing). "
+            "Fuel and timing map <i>data</i> is unchanged — only the axis lookup is rescaled "
+            "so the ECU interpolates correctly for the new sensor's transfer function."
+            "</span>",
+            textFormat=Qt.RichText)
+        scope.setWordWrap(True)
+        layout.addWidget(scope)
+
+        # ── Buttons ──────────────────────────────────────────────────────────
+        btns = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        ok_btn = btns.button(QDialogButtonBox.Ok)
+        ok_btn.setText("Apply Patch")
+        ok_btn.setStyleSheet(
+            "QPushButton{background:#0e639c;color:#fff;padding:5px 16px;"
+            "border:none;border-radius:3px;}"
+            "QPushButton:hover{background:#1177bb;}")
+        btns.accepted.connect(self._on_apply)
+        btns.rejected.connect(self.reject)
+        layout.addWidget(btns)
+
+        self.setStyleSheet("""
+            QDialog { background:#1e1e1e; color:#d4d4d4; }
+            QLabel  { color:#d4d4d4; }
+            QRadioButton { color:#d4d4d4; }
+            QDialogButtonBox QPushButton {
+                background:#333; color:#d4d4d4; padding:5px 14px;
+                border:1px solid #555; border-radius:3px;
+            }
+            QDialogButtonBox QPushButton:hover { background:#444; }
+        """)
+
+    def _on_profile_changed(self, key: str, checked: bool):
+        if not checked:
+            return
+        # Show CO pot warning for any non-stock sensor
+        needs_co_fix = not hr.MAF_PROFILES[key]["co_pot"]
+        self._co_box.setVisible(needs_co_fix)
+
+    def _on_apply(self):
+        for key, rb in self._buttons.items():
+            if rb.isChecked():
+                self.patch_requested.emit(key)
+                self.accept()
+                return
+        self.reject()
+
+    def selected_profile(self) -> str:
+        for key, rb in self._buttons.items():
+            if rb.isChecked():
+                return key
+        return "stock_7a"
+
+
+# ---------------------------------------------------------------------------
 # Map tab
 # ---------------------------------------------------------------------------
 
@@ -1396,10 +1601,23 @@ class MainWindow(QMainWindow):
         self.btn_save512.clicked.connect(self.save_27c512)
         self.btn_save512.setEnabled(False)
 
+        self.btn_maf = QPushButton("MAF Patch…")
+        self.btn_maf.setToolTip(
+            "Patch MAF sensor axis tables for a different housing\n"
+            "(266D / 7A Late only)")
+        self.btn_maf.clicked.connect(self.open_maf_patch)
+        self.btn_maf.setEnabled(False)
+        self.btn_maf.setStyleSheet(
+            "QPushButton { background:#2a1a00; color:#ff9900; border:1px solid #664400; "
+            "padding:5px 14px; border-radius:3px; }"
+            "QPushButton:hover { background:#3d2700; }"
+            "QPushButton:disabled { background:#1e1e1e; color:#444; border-color:#333; }")
+
         top.addWidget(self.lbl_file, 1)
         top.addWidget(btn_open)
         top.addWidget(self.btn_save)
         top.addWidget(self.btn_save512)
+        top.addWidget(self.btn_maf)
         root.addLayout(top)
 
         splitter = QSplitter(Qt.Horizontal)
@@ -1520,6 +1738,20 @@ class MainWindow(QMainWindow):
         self.btn_save.setEnabled(True)
         self.btn_save512.setEnabled(True)
 
+        # MAF patch button — 266D only
+        is_266d = (result.variant and result.variant.version_key == "266D")
+        self.btn_maf.setEnabled(bool(is_266d))
+        if is_266d:
+            maf_key = hr.detect_maf_patch(data)
+            maf_profile = hr.MAF_PROFILES.get(maf_key, {})
+            maf_label   = maf_profile.get("label", maf_key)
+            self.btn_maf.setText(f"MAF: {maf_label} ▾")
+            self.btn_maf.setToolTip(
+                f"Current sensor axis: {maf_label}\n"
+                f"Click to patch for a different MAF housing.")
+        else:
+            self.btn_maf.setText("MAF Patch…")
+
         while self.tabs.count():
             self.tabs.removeTab(0)
         self._map_tabs = []
@@ -1629,6 +1861,48 @@ class MainWindow(QMainWindow):
                 f"Saved 27C512 \u2192 {Path(path).name}  (64 KB, mirrored, checksum corrected)")
         except Exception as e:
             QMessageBox.critical(self, "Save Error", str(e))
+
+    # ── MAF patch ─────────────────────────────────────────────────────────────
+
+    def open_maf_patch(self):
+        """Open the MAF sensor patch dialog and apply the chosen profile."""
+        if not self._rom_snapshot:
+            return
+        if not (self.current_variant and self.current_variant.version_key == "266D"):
+            QMessageBox.information(
+                self, "MAF Patch",
+                "MAF axis patching is only supported for the 266D (7A Late) ECU.")
+            return
+
+        dlg = MafPatchDialog(self._rom_snapshot, parent=self)
+        if dlg.exec_() != QDialog.Accepted:
+            return
+
+        profile_key = dlg.selected_profile()
+        try:
+            patched = hr.apply_maf_patch(self._rom_snapshot, profile_key)
+        except Exception as e:
+            QMessageBox.critical(self, "MAF Patch Error", str(e))
+            return
+
+        # Reload the patched data as the new working snapshot.
+        # This is a deliberate full reload so all open map tabs, the hex view,
+        # and the overview panel reflect the new axis values immediately.
+        self._rom_snapshot = patched
+        self._load_rom(self.current_path)
+
+        profile = hr.MAF_PROFILES[profile_key]
+        msg = (f"MAF axis patched to:\n{profile['label']}\n\n"
+               f"{profile['housing']}\n{profile['hp_note']}")
+        if not profile["co_pot"]:
+            msg += (
+                "\n\n⚠  Hardware action required:\n"
+                "This sensor has no CO pot (wire 4).\n"
+                "Solder a 10 kΩ / 10 kΩ voltage divider from ECU 5 V ref\n"
+                "to GND and connect the midpoint (2.5 V) to ECU pin 4.\n"
+                "Do NOT leave pin 4 floating.")
+        QMessageBox.information(self, "MAF Patch Applied", msg)
+
     # ── Misc ─────────────────────────────────────────────────────────────────
 
     def _about(self):

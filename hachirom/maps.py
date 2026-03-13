@@ -167,3 +167,66 @@ def diff_summary(diffs: list[DiffByte]) -> dict[str, int]:
     from collections import Counter
     c: Counter = Counter(d.map_name or "unmapped" for d in diffs)
     return dict(c)
+
+
+# ---------------------------------------------------------------------------
+# MAF hardware patch — 266D only
+# ---------------------------------------------------------------------------
+
+from .roms import (MAF_AXIS_ADDR_FUEL, MAF_AXIS_ADDR_TIMING,
+                   MAF_AXIS_LEN, MAF_PROFILES)
+
+
+def detect_maf_patch(data: bytes) -> str:
+    """
+    Inspect the two MAF axis tables in a 266D ROM and return the profile key
+    that matches, or ``"unknown"`` if no known profile matches.
+
+    Returns one of: ``"stock_7a"`` | ``"vr6_tt225"`` | ``"s4_82mm"`` | ``"unknown"``
+
+    Detection strategy
+    ------------------
+    Both axis copies (fuel @ 0x05D0, timing @ 0x05E0) are checked.  The fuel
+    axis copy is the primary match target; the timing copy is used as a
+    cross-check.  If the two copies disagree the ROM is considered ``"unknown"``
+    so the UI can warn the user.
+    """
+    if len(data) < MAF_AXIS_ADDR_TIMING + MAF_AXIS_LEN:
+        return "unknown"
+
+    fuel_axis   = list(data[MAF_AXIS_ADDR_FUEL  : MAF_AXIS_ADDR_FUEL   + MAF_AXIS_LEN])
+    timing_axis = list(data[MAF_AXIS_ADDR_TIMING : MAF_AXIS_ADDR_TIMING + MAF_AXIS_LEN])
+
+    matched = "unknown"
+    for key, profile in MAF_PROFILES.items():
+        if fuel_axis == profile["axis"]:
+            matched = key
+            break
+
+    # Cross-check: timing axis should match too.  If not, flag as inconsistent.
+    if matched != "unknown":
+        if timing_axis != MAF_PROFILES[matched]["axis"]:
+            return "inconsistent"
+
+    return matched
+
+
+def apply_maf_patch(data: bytes, profile_key: str) -> bytes:
+    """
+    Return a new bytes object with the MAF axis tables rewritten to match
+    *profile_key*.  Both copies (fuel and timing) are updated together.
+
+    Raises ``KeyError`` if *profile_key* is not in ``MAF_PROFILES``.
+    Raises ``ValueError`` if *data* is too short.
+    """
+    if profile_key not in MAF_PROFILES:
+        raise KeyError(f"Unknown MAF profile: {profile_key!r}")
+    if len(data) < MAF_AXIS_ADDR_TIMING + MAF_AXIS_LEN:
+        raise ValueError("ROM data too short for MAF axis patch")
+
+    axis = MAF_PROFILES[profile_key]["axis"]
+    rom  = bytearray(data)
+    for i, v in enumerate(axis):
+        rom[MAF_AXIS_ADDR_FUEL   + i] = v
+        rom[MAF_AXIS_ADDR_TIMING + i] = v
+    return bytes(rom)
