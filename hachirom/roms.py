@@ -1,206 +1,260 @@
 """
-HachiROM — Known ROM definitions and detection logic.
+HachiROM — ROM variant definitions and map address tables.
 Source of truth for all supported Hitachi ECU variants.
+
+Map addresses and formulas confirmed from:
+  - 034 Motorsport .ecu definition files (7A_Late_Generic_1.01.ecu,
+    7A_Early_Generic_1.06.ecu, AAH_12v_V6_Generic_1_02.ecu)
+  - Java decompilation of ECUGUI.jar / CustomizedStore.jar
+  - Decoded stock ROM verification (audi90-teensy-ecu/tuner_app/ecu_profiles.py)
+
+.034 FILE FORMAT
+================
+All .034 files are bit-scrambled. Apply unscramble_034() to recover
+native ROM bytes before reading any addresses below.
 """
 
 from dataclasses import dataclass, field
-from typing import Optional
-import hashlib
+from typing import Optional, Callable
+import zlib
+
 
 # ---------------------------------------------------------------------------
-# Map descriptor
+# .034 unscramble
+# ---------------------------------------------------------------------------
+
+def _alg_zero(b: int) -> int:
+    return (((b & 0xAA) >> 1) | (((b & 0x55) << 1) & 0xFF)) & 0xFF
+
+def _b_swap(x: int) -> int:
+    return ((x >> 4) | ((x << 4) & 0xFF)) & 0xFF
+
+def unscramble_byte(b: int) -> int:
+    return _b_swap(_alg_zero(b))
+
+def unscramble_034(data: bytes) -> bytes:
+    """Unscramble a .034 file to native ECU ROM bytes."""
+    return bytes(unscramble_byte(b) for b in data)
+
+
+# ---------------------------------------------------------------------------
+# Axis constants (confirmed from decoded stock ROMs)
+# ---------------------------------------------------------------------------
+
+AXIS_FACTOR_RPM  = 25.0
+AXIS_FACTOR_LOAD = 0.3922
+
+RPM_AXIS_266D   = [600,800,1000,1250,1500,1750,2000,2250,2500,2750,3000,3500,4000,5000,6000,6300]
+RPM_AXIS_266B   = [600,800,1000,1250,1500,2000,2500,2750,3000,3500,4000,4500,5000,5500,6000,6375]
+TIMING_RPM_AXIS = [700,750,1000,1250,1500,1750,2000,3000,3500,4000,4400,4600,5000,5500,6000,6300]
+LOAD_AXIS       = [12.6,18.8,23.5,28.2,32.9,38.8,44.7,50.6,56.9,63.1,69.4,75.7,82.0,88.2,94.5,100.0]
+RPM_AXIS_AAH    = [500,750,1000,1250,1500,1750,2000,2300,2600,3000,3500,4000,4500,5000,5500,6000]
+LOAD_AXIS_AAH   = [12.6,18.8,23.5,28.2,32.9,38.4,43.9,50.2,56.5,62.8,69.0,75.3,81.6,87.9,94.1,100.0]
+
+
+# ---------------------------------------------------------------------------
+# Display formula helpers
+# ---------------------------------------------------------------------------
+
+def fuel_266d_decode(v: int) -> float:
+    signed = v if v < 128 else v - 256
+    return float(signed + 128)
+
+def fuel_266d_encode(display: float) -> int:
+    return max(0, min(255, round(display - 128))) & 0xFF
+
+def fuel_lambda_decode(v: int) -> float:
+    signed = v if v < 128 else v - 256
+    return round(signed * 0.007813 + 1.0, 3)
+
+def fuel_lambda_encode(lam: float) -> int:
+    return max(0, min(255, round((lam - 1.0) / 0.007813))) & 0xFF
+
+def timing_decode(v: int) -> int:
+    return v if v < 128 else v - 256
+
+def timing_encode(deg: int) -> int:
+    return deg & 0xFF
+
+
+# ---------------------------------------------------------------------------
+# Checksum parameters
+# ---------------------------------------------------------------------------
+
+CHECKSUM_PARAMS = {
+    "266D": {"target": 3_384_576, "cs_from": 0x1600, "cs_to": 0x17FF},
+    "266B": {"target": 3_894_528, "cs_from": 0x1400, "cs_to": 0x1FFF},
+    "AAH":  {"target": 3_684_096, "cs_from": 0x6700, "cs_to": 0x7D1E},
+}
+
+
+# ---------------------------------------------------------------------------
+# MapDef
 # ---------------------------------------------------------------------------
 
 @dataclass
 class MapDef:
-    name: str
-    address: int
-    rows: int
-    cols: int
+    name:       str
+    address:    int
+    rows:       int
+    cols:       int
     description: str = ""
-    unit: str = ""
-    # optional decode lambda: raw_byte -> human value
-    decode: Optional[callable] = field(default=None, repr=False)
-    encode: Optional[callable] = field(default=None, repr=False)
+    unit:       str = ""
+    rpm_axis:   list = field(default_factory=list)
+    load_axis:  list = field(default_factory=list)
+    decode:     Optional[Callable] = field(default=None, repr=False)
+    encode:     Optional[Callable] = field(default=None, repr=False)
+
+    @property
+    def size(self) -> int:
+        return self.rows * self.cols
+
+    @property
+    def is_2d(self) -> bool:
+        return self.rows > 1 and self.cols > 1
+
+    @property
+    def is_scalar(self) -> bool:
+        return self.rows == 1 and self.cols == 1
 
 
 # ---------------------------------------------------------------------------
-# ECU / ROM variant descriptors
+# ROMVariant
 # ---------------------------------------------------------------------------
 
 @dataclass
 class ROMVariant:
-    name: str                  # e.g. "7A Late (893906266D)"
-    part_number: str           # e.g. "893906266D"
-    chip: str                  # e.g. "27C512"
-    size: int                  # bytes — 65536 for 27C512
-    description: str
-    maps: list                 # list[MapDef]
-    # Known SHA256 hashes of stock ROMs (may be empty list)
-    known_hashes: list = field(default_factory=list)
-    # Offset of a known signature byte pattern used for detection
-    signature: Optional[bytes] = field(default=None, repr=False)
+    name:             str
+    version_key:      str
+    part_number:      str
+    chip:             str
+    size:             int
+    description:      str
+    maps:             list
+    checksum:         dict = field(default_factory=dict)
+    known_crc32s:     list = field(default_factory=list)
+    reset_vector:     Optional[bytes] = None
+    signature:        Optional[bytes] = field(default=None, repr=False)
     signature_offset: Optional[int] = None
 
 
 # ---------------------------------------------------------------------------
-# Decode helpers
+# 266D — Late 7A ECU
 # ---------------------------------------------------------------------------
 
-def _ign_decode(v: int) -> float:
-    """Digifant ignition byte → degrees BTDC"""
-    return round((210 - v) / 2.86, 2)
-
-def _ign_encode(deg: float) -> int:
-    return max(0, min(255, round(210 - deg * 2.86)))
-
-def _rpm_decode(hi: int, lo: int) -> int:
-    """16-bit big-endian word → RPM  (30,000,000 / word)"""
-    word = (hi << 8) | lo
-    return int(30_000_000 / word) if word else 0
-
-def _rpm_scalar_decode(hi: int, lo: int) -> int:
-    """16-bit big-endian word → RPM axis  (15,000,000 / word)"""
-    word = (hi << 8) | lo
-    return int(15_000_000 / word) if word else 0
-
-
-# ---------------------------------------------------------------------------
-# 7A / NF  —  Late ECU  893906266D  (27C512, 64 KB)
-# This is the primary target: 1990 Audi 90 / Coupe Quattro 2.3 20v
-# Map offsets derived from 034 Motorsport XDF + community decompilation
-# ---------------------------------------------------------------------------
-
-_7A_LATE_MAPS = [
-    MapDef("Ignition",          0x2800, 16, 16,
-           "Main ignition advance table",
-           "°BTDC",
-           decode=lambda v: _ign_decode(v),
-           encode=lambda v: _ign_encode(v)),
-
-    MapDef("Fuel",              0x2900, 16, 16,
-           "Main fuel / injection duration table",
-           "raw"),
-
-    MapDef("RPM Scalar",        0x2A00, 1,  16,
-           "RPM axis values for ignition/fuel tables (16-bit words)",
-           "RPM"),
-
-    MapDef("Warmup Enrichment", 0x2B00, 1,  17,
-           "Cold start warmup enrichment vs ECT",
-           "%"),
-
-    MapDef("IAT Compensation",  0x2B20, 1,  17,
-           "Intake air temperature fuel compensation",
-           "%"),
-
-    MapDef("ECT Compensation",  0x2B40, 1,  17,
-           "Engine coolant temperature fuel compensation",
-           "%"),
-
-    MapDef("Knock Retard",      0x2C00, 1,  16,
-           "Per-cell knock retard values",
-           "°"),
-
-    MapDef("Coil Dwell",        0x2C20, 1,  16,
-           "Coil dwell time vs RPM",
-           "ms"),
-
-    MapDef("WOT Enrichment",    0x2D00, 1,  17,
-           "Wide open throttle enrichment",
-           "%"),
-
-    MapDef("Idle Speed",        0x2D40, 1,  16,
-           "ISV / idle speed control table",
-           "raw"),
-
-    MapDef("Rev Limit",         0x3FF0, 1,   2,
-           "Rev limiter (16-bit big-endian word: 30,000,000 / RPM)",
-           "RPM"),
-
-    MapDef("Accel Enrichment",  0x2E00, 1,  16,
-           "Acceleration enrichment (transient fueling)",
-           "raw"),
+_MAPS_266D = [
+    MapDef("Primary Fueling",    0x0000, 16, 16,
+           "Fuel map (RPM×Load). signed(byte)+128, stock 40-123.", "fuel units",
+           rpm_axis=RPM_AXIS_266D, load_axis=LOAD_AXIS,
+           decode=fuel_266d_decode, encode=fuel_266d_encode),
+    MapDef("Primary Timing",     0x0100, 16, 16,
+           "Ignition advance. Raw byte, >128=retard.", "deg BTDC",
+           rpm_axis=TIMING_RPM_AXIS, load_axis=LOAD_AXIS,
+           decode=timing_decode, encode=timing_encode),
+    MapDef("Timing Knock Safety",0x1000, 16, 16,
+           "Knock fallback timing map.", "deg BTDC",
+           rpm_axis=TIMING_RPM_AXIS, load_axis=LOAD_AXIS,
+           decode=timing_decode, encode=timing_encode),
+    MapDef("RPM Axis (Fuel)",    0x0250,  1, 16, "Fuel RPM axis. raw*25=RPM.", "RPM"),
+    MapDef("Load Axis",          0x0260,  1, 16, "Load axis. raw*0.3922=kPa.", "kPa"),
+    MapDef("RPM Axis (Timing)",  0x0270,  1, 16, "Timing RPM axis. raw*25=RPM.", "RPM"),
+    MapDef("Load Axis (Timing)", 0x0280,  1, 16, "Timing load axis.", "kPa"),
+    MapDef("CL Load Threshold",  0x0660,  1, 16, "CL disable load threshold per RPM.", "kPa"),
+    MapDef("CL RPM Limit",       0x07E1,  1,  1, "Disable CL above RPM. raw*25=RPM.", "RPM"),
+    MapDef("Decel Cutoff",       0x0E30,  1, 16, "Injector decel cutoff per RPM.", "kPa"),
 ]
 
-_7A_LATE_PATCHES = {
-    # name: (address, stock_bytes, patched_bytes, description)
-    "Open Loop Lambda": (0x3C00, bytes([0xBD, 0x6D, 0x07]), bytes([0x01, 0x01, 0x01]),
-                         "Disables closed-loop lambda correction"),
-    "ISV Disable":      (0x3D00, bytes([0xBD, 0x66, 0x0C]), bytes([0x01, 0x01, 0x01]),
-                         "Disables idle speed valve control"),
-}
-
-ROM_7A_LATE = ROMVariant(
-    name="7A Late",
-    part_number="893906266D",
-    chip="27C512",
-    size=65536,
+ROM_266D = ROMVariant(
+    name="7A Late", version_key="266D", part_number="893906266D",
+    chip="27C512", size=32768,
     description="Audi 90 / Coupe Quattro 2.3 20v NF/7A — late 4-connector ECU",
-    maps=_7A_LATE_MAPS,
-    known_hashes=[],       # populate with verified SHA256 of stock dump
-    signature=None,        # TODO: add once stock ROM is confirmed
+    maps=_MAPS_266D,
+    checksum=CHECKSUM_PARAMS["266D"],
+    known_crc32s=[0x609f1f40, 0x4152e167],
+    reset_vector=bytes([0xE8, 0xB1]),
 )
 
 
 # ---------------------------------------------------------------------------
-# 7A Early  —  893906266B  (27C512, 64 KB)
-# Earlier 2-connector variant — slightly different map offsets
+# 266B — Early 7A ECU
 # ---------------------------------------------------------------------------
 
-_7A_EARLY_MAPS = [
-    MapDef("Ignition",          0x2600, 16, 16, "Main ignition advance", "°BTDC",
-           decode=lambda v: _ign_decode(v), encode=lambda v: _ign_encode(v)),
-    MapDef("Fuel",              0x2700, 16, 16, "Main fuel table", "raw"),
-    MapDef("RPM Scalar",        0x2800, 1,  16, "RPM axis", "RPM"),
-    MapDef("Warmup Enrichment", 0x2900, 1,  17, "Warmup enrichment", "%"),
-    MapDef("Rev Limit",         0x3DE0, 1,   2, "Rev limiter", "RPM"),
+_MAPS_266B = [
+    MapDef("Fueling Map",       0x0000, 16, 16,
+           "Fuel map (Lambda). signed(byte)*0.007813+1.0, stock 0.625-0.867.", "lambda",
+           rpm_axis=RPM_AXIS_266B, load_axis=LOAD_AXIS,
+           decode=fuel_lambda_decode, encode=fuel_lambda_encode),
+    MapDef("Timing Map",        0x0100, 16, 16,
+           "Ignition advance (deg BTDC).", "deg BTDC",
+           rpm_axis=TIMING_RPM_AXIS, load_axis=LOAD_AXIS,
+           decode=timing_decode, encode=timing_encode),
+    MapDef("Timing Map Knock",  0x1000, 16, 16,
+           "Knock fallback timing map.", "deg BTDC",
+           rpm_axis=TIMING_RPM_AXIS, load_axis=LOAD_AXIS,
+           decode=timing_decode, encode=timing_encode),
+    MapDef("MAF Linearization", 0x02D0,  1, 64,
+           "MAF linearization — 64x16-bit big-endian values.", "raw"),
+    MapDef("Injection Scaler",  0x077E,  1,  1, "Global injector scaler.", "raw"),
+    MapDef("CL Disable RPM",    0x07E1,  1,  1, "Disable CL above RPM.", "RPM"),
+    MapDef("Decel Cutoff",      0x0E30,  1, 16, "Decel cutoff per RPM.", "kPa"),
+    MapDef("CL Load Limit",     0x0660,  1, 16, "CL disable load limit per RPM.", "kPa"),
 ]
 
-ROM_7A_EARLY = ROMVariant(
-    name="7A Early",
-    part_number="893906266B",
-    chip="27C512",
-    size=65536,
+ROM_266B = ROMVariant(
+    name="7A Early", version_key="266B", part_number="893906266B",
+    chip="27C512", size=32768,
     description="Audi 90 / Coupe Quattro 2.3 20v NF/7A — early 2-connector ECU",
-    maps=_7A_EARLY_MAPS,
-    known_hashes=[],
+    maps=_MAPS_266B,
+    checksum=CHECKSUM_PARAMS["266B"],
+    known_crc32s=[0x7739bde5],
+    reset_vector=bytes([0xD7, 0xBC]),
 )
 
 
 # ---------------------------------------------------------------------------
-# AAH  —  4A0906266  (27C512, 64 KB)
-# Audi 100 / A6 / S4 2.8L V6 12v
+# AAH — 2.8L V6 12v
 # ---------------------------------------------------------------------------
 
-_AAH_MAPS = [
-    MapDef("Ignition",          0x3000, 16, 16, "Main ignition advance", "°BTDC",
-           decode=lambda v: _ign_decode(v), encode=lambda v: _ign_encode(v)),
-    MapDef("Fuel",              0x3100, 16, 16, "Main fuel table", "raw"),
-    MapDef("RPM Scalar",        0x3200, 1,  16, "RPM axis", "RPM"),
-    MapDef("Warmup Enrichment", 0x3300, 1,  17, "Warmup enrichment", "%"),
-    MapDef("IAT Compensation",  0x3320, 1,  17, "IAT compensation", "%"),
-    MapDef("ECT Compensation",  0x3340, 1,  17, "ECT compensation", "%"),
-    MapDef("Rev Limit",         0x4FF0, 1,   2, "Rev limiter", "RPM"),
+_MAPS_AAH = [
+    MapDef("Fueling Map",       0x0000, 16, 16,
+           "Fuel map (Lambda). signed(byte)*0.007813+1.0.", "lambda",
+           rpm_axis=RPM_AXIS_AAH, load_axis=LOAD_AXIS_AAH,
+           decode=fuel_lambda_decode, encode=fuel_lambda_encode),
+    MapDef("Timing Map",        0x0100, 16, 16,
+           "Ignition advance (deg BTDC).", "deg BTDC",
+           rpm_axis=RPM_AXIS_AAH, load_axis=LOAD_AXIS_AAH,
+           decode=timing_decode, encode=timing_encode),
+    MapDef("Timing Map Knock",  0x1000, 16, 16,
+           "Knock fallback timing map.", "deg BTDC",
+           rpm_axis=RPM_AXIS_AAH, load_axis=LOAD_AXIS_AAH,
+           decode=timing_decode, encode=timing_encode),
+    MapDef("Injection Scaler",  0x077E,  1,  1, "Global injector scaler (stock=100).", "raw"),
+    MapDef("CL Disable RPM",    0x07E1,  1,  1, "Disable CL above RPM.", "RPM"),
+    MapDef("Decel Cutoff",      0x0E30,  1, 16, "Decel cutoff per RPM.", "kPa"),
 ]
 
 ROM_AAH = ROMVariant(
-    name="AAH 12v",
-    part_number="4A0906266",
-    chip="27C512",
-    size=65536,
-    description="Audi 100 / A6 / S4 2.8L V6 12v",
-    maps=_AAH_MAPS,
-    known_hashes=[],
+    name="AAH 12v", version_key="AAH", part_number="4A0906266",
+    chip="27C512", size=32768,
+    description="Audi 100 / A6 / S4 / Coupe Quattro 2.8L V6 12v",
+    maps=_MAPS_AAH,
+    checksum=CHECKSUM_PARAMS["AAH"],
+    known_crc32s=[0x13db1432, 0x4818fa0b, 0x6875638d],
 )
 
 
 # ---------------------------------------------------------------------------
-# Registry — all known variants
+# Registry
 # ---------------------------------------------------------------------------
 
-ALL_VARIANTS: list[ROMVariant] = [
-    ROM_7A_LATE,
-    ROM_7A_EARLY,
-    ROM_AAH,
-]
+ALL_VARIANTS: list[ROMVariant] = [ROM_266D, ROM_266B, ROM_AAH]
+
+_CRC32_MAP: dict[int, ROMVariant] = {}
+for _v in ALL_VARIANTS:
+    for _c in _v.known_crc32s:
+        _CRC32_MAP[_c] = _v
+
+_RESET_VEC_MAP: dict[tuple, ROMVariant] = {
+    (0xE8, 0xB1): ROM_266D,
+    (0xD7, 0xBC): ROM_266B,
+}

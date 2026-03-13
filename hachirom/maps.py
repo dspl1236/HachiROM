@@ -1,5 +1,6 @@
 """
 HachiROM — Map I/O, checksum, and compare tools.
+Checksum algorithm confirmed from 034 Motorsport decompiled Checksum.applyOldStyle.
 """
 
 from __future__ import annotations
@@ -9,35 +10,24 @@ from .roms import ROMVariant, MapDef
 
 
 # ---------------------------------------------------------------------------
-# Map extraction
+# Map read / write
 # ---------------------------------------------------------------------------
 
 def read_map(data: bytes, map_def: MapDef) -> list[list[int]]:
-    """
-    Extract a 2D map from ROM bytes.
-    Returns a rows x cols list of raw byte values.
-    Single-row maps return a 1 x cols list.
-    16-bit maps (cols=2 for 1 row special cases) handled separately.
-    """
-    rows, cols = map_def.rows, map_def.cols
-    addr = map_def.address
+    """Extract a 2D map from ROM bytes. Returns rows×cols list of raw bytes."""
+    rows, cols, addr = map_def.rows, map_def.cols, map_def.address
     result = []
     for r in range(rows):
         row = []
         for c in range(cols):
             offset = addr + r * cols + c
-            if offset < len(data):
-                row.append(data[offset])
-            else:
-                row.append(0)
+            row.append(data[offset] if offset < len(data) else 0)
         result.append(row)
     return result
 
 
 def read_map_decoded(data: bytes, map_def: MapDef) -> list[list]:
-    """
-    Like read_map but applies the decode function if one is defined.
-    """
+    """Like read_map but applies the decode function if one exists."""
     raw = read_map(data, map_def)
     if map_def.decode is None:
         return raw
@@ -45,12 +35,8 @@ def read_map_decoded(data: bytes, map_def: MapDef) -> list[list]:
 
 
 def write_map(data: bytearray, map_def: MapDef, values: list[list[int]]) -> bytearray:
-    """
-    Write a 2D map of raw byte values back into the ROM bytearray.
-    Returns the modified bytearray.
-    """
-    addr = map_def.address
-    rows, cols = map_def.rows, map_def.cols
+    """Write raw byte values back into the ROM bytearray."""
+    addr, rows, cols = map_def.address, map_def.rows, map_def.cols
     for r in range(rows):
         for c in range(cols):
             offset = addr + r * cols + c
@@ -60,82 +46,108 @@ def write_map(data: bytearray, map_def: MapDef, values: list[list[int]]) -> byte
 
 
 def write_map_encoded(data: bytearray, map_def: MapDef, values: list[list]) -> bytearray:
-    """
-    Write decoded (human) values back after applying encode function.
-    """
+    """Write decoded (human) values back after applying encode function."""
     if map_def.encode is None:
         return write_map(data, map_def, values)
     raw = [[map_def.encode(v) for v in row] for row in values]
     return write_map(data, map_def, raw)
 
 
-def read_rev_limit(data: bytes, map_def: MapDef) -> int:
-    """Read a 16-bit big-endian rev limit word → RPM."""
-    addr = map_def.address
-    if addr + 1 >= len(data):
-        return 0
-    word = (data[addr] << 8) | data[addr + 1]
-    return int(30_000_000 / word) if word else 0
+def read_scalar(data: bytes, address: int, factor: float = 1.0) -> float:
+    """Read a single byte scalar and apply factor."""
+    return data[address] * factor if address < len(data) else 0.0
 
 
-def write_rev_limit(data: bytearray, map_def: MapDef, rpm: int) -> bytearray:
-    """Write RPM as 16-bit big-endian word to rev limit address."""
-    word = int(30_000_000 / rpm)
-    addr = map_def.address
-    data[addr]     = (word >> 8) & 0xFF
-    data[addr + 1] = word & 0xFF
+def write_scalar(data: bytearray, address: int, value: float, factor: float = 1.0) -> bytearray:
+    """Write a scalar byte (value / factor, clamped 0-255)."""
+    data[address] = max(0, min(255, round(value / factor))) if factor else 0
     return data
 
 
+def read_axis(data: bytes, address: int, count: int, factor: float) -> list:
+    """Read count axis breakpoints from ROM and decode with factor."""
+    return [round(data[address + i] * factor, 1) for i in range(count)
+            if address + i < len(data)]
+
+
 # ---------------------------------------------------------------------------
-# Checksum
+# Checksum (confirmed from 034 decompiled Checksum.applyOldStyle)
 # ---------------------------------------------------------------------------
 
-def compute_checksum(data: bytes) -> int:
-    """Simple 8-bit sum checksum over entire ROM."""
-    return sum(data) & 0xFF
+def compute_sum(data: bytes) -> int:
+    """Sum all bytes of the (up to) 32KB native ROM."""
+    return sum(data[:32768])
 
 
-def verify_checksum(data: bytes, expected: int) -> bool:
-    return compute_checksum(data) == expected
+def verify_checksum(data: bytes, variant: ROMVariant) -> bool:
+    """Return True if this ROM passes the checksum for its variant."""
+    cs = variant.checksum
+    return compute_sum(data) == cs.get("target", -1)
 
 
-def find_checksum_byte(data: bytes) -> Optional[int]:
+def apply_checksum(data: bytes, variant: ROMVariant) -> bytearray:
     """
-    Heuristic: scan for a byte whose position makes the ROM sum to 0x00.
-    Returns address if found, None otherwise.
+    Fix checksum: redistribute bytes in correction region so
+    sum(32KB ROM) == target. Uses same distribute-one-at-a-time algorithm
+    as 034 Motorsport tool. Returns corrected 32KB bytearray.
     """
-    total = sum(data) & 0xFF
-    # Look for last non-zero candidate in the final 256 bytes
-    for addr in range(len(data) - 1, len(data) - 256, -1):
-        if data[addr] == (0x100 - total + data[addr]) & 0xFF:
-            return addr
-    return None
+    cs     = variant.checksum
+    target = cs["target"]
+    cf     = cs["cs_from"]
+    ct     = cs["cs_to"]
+    n      = ct - cf + 1
+
+    rom   = bytearray(data[:32768])
+    delta = sum(rom) - target
+    if delta == 0:
+        return rom
+
+    sign = 1 if delta > 0 else -1
+    remaining = abs(delta)
+    passes = 0
+    while remaining > 0:
+        passes += 1
+        if passes > 256:
+            break
+        absorbed = 0
+        for i in range(n):
+            if remaining == 0:
+                break
+            b = rom[cf + i]
+            if sign == 1 and b > 0:
+                rom[cf + i] -= 1
+                absorbed += 1
+                remaining -= 1
+            elif sign == -1 and b < 255:
+                rom[cf + i] += 1
+                absorbed += 1
+                remaining -= 1
+        if absorbed == 0:
+            break
+    return rom
 
 
 # ---------------------------------------------------------------------------
-# ROM compare
+# ROM compare / diff
 # ---------------------------------------------------------------------------
 
 @dataclass
 class DiffByte:
-    address: int
-    a: int
-    b: int
-    map_name: Optional[str] = None   # which map region this falls in, if any
+    address:  int
+    a:        int
+    b:        int
+    map_name: Optional[str] = None
 
 
 def compare_roms(data_a: bytes, data_b: bytes,
                  variant: Optional[ROMVariant] = None) -> list[DiffByte]:
     """
-    Byte-by-byte diff of two ROM images.
-    If a variant is supplied, tags each diff byte with the map region it belongs to.
-    Returns a list of DiffByte entries for every address that differs.
+    Byte-by-byte diff. Tags each changed byte with its map region name
+    if a variant is provided.
     """
     length = min(len(data_a), len(data_b))
     diffs: list[DiffByte] = []
 
-    # Pre-build address → map_name lookup for the variant
     addr_map: dict[int, str] = {}
     if variant:
         for m in variant.maps:
@@ -145,23 +157,13 @@ def compare_roms(data_a: bytes, data_b: bytes,
 
     for addr in range(length):
         if data_a[addr] != data_b[addr]:
-            diffs.append(DiffByte(
-                address=addr,
-                a=data_a[addr],
-                b=data_b[addr],
-                map_name=addr_map.get(addr),
-            ))
-
+            diffs.append(DiffByte(addr, data_a[addr], data_b[addr],
+                                  addr_map.get(addr)))
     return diffs
 
 
 def diff_summary(diffs: list[DiffByte]) -> dict[str, int]:
-    """
-    Summarise diff by map region.
-    Returns dict of {region_name: count_of_changed_bytes}.
-    """
+    """Summarise diff count by map region."""
     from collections import Counter
-    c: Counter = Counter()
-    for d in diffs:
-        c[d.map_name or "unknown"] += 1
+    c: Counter = Counter(d.map_name or "unmapped" for d in diffs)
     return dict(c)

@@ -1,40 +1,57 @@
 """
 HachiROM
 ========
-Source-of-truth ROM library for Hitachi ECU variants used in
-Audi / VW applications (7A 20v, AAH 12v, and related).
+Source-of-truth ROM library for Hitachi ECU variants (7A 20v, AAH 12v).
+Also serves as the map definition backend for audi90-teensy-ecu.
 
 Quick start
 -----------
-    from hachirom import load_bin, detect, read_map
+    import hachirom as hr
 
-    data = load_bin("my_rom.bin")
-    result = detect(data)
-    print(result.variant.name)   # e.g. "7A Late"
+    data   = hr.load_bin("my_rom.bin")       # .bin or .034 files accepted
+    result = hr.detect(data)
+    print(result.variant.name)               # "7A Late"
 
-    ign_map = read_map(data, result.variant.maps[0])
+    fuel = hr.read_map(data, result.variant.maps[0])
+
+Teensy bridge
+-------------
+    from hachirom.bridge import (
+        get_flat_fuel_map, get_flat_timing_map,
+        set_cell, apply_checksum, compare_roms
+    )
 """
 
-from .detect import detect, load_bin, save_bin, detect_patches, DetectionResult
+from .detect import detect, load_bin, save_bin, DetectionResult
 from .maps   import (read_map, read_map_decoded, write_map, write_map_encoded,
-                     read_rev_limit, write_rev_limit,
-                     compute_checksum, verify_checksum,
+                     read_axis, read_scalar, write_scalar,
+                     compute_sum, verify_checksum, apply_checksum,
                      compare_roms, diff_summary, DiffByte)
 from .roms   import (ROMVariant, MapDef, ALL_VARIANTS,
-                     ROM_7A_LATE, ROM_7A_EARLY, ROM_AAH,
-                     _ign_decode, _ign_encode, _rpm_decode)
+                     ROM_266D, ROM_266B, ROM_AAH,
+                     unscramble_034, unscramble_byte,
+                     fuel_266d_decode, fuel_266d_encode,
+                     fuel_lambda_decode, fuel_lambda_encode,
+                     timing_decode, timing_encode,
+                     RPM_AXIS_266D, RPM_AXIS_266B, TIMING_RPM_AXIS,
+                     LOAD_AXIS, RPM_AXIS_AAH, LOAD_AXIS_AAH,
+                     CHECKSUM_PARAMS)
 
-__version__ = "0.1.0"
+__version__ = "0.2.0"
+
 __all__ = [
-    # detect
-    "detect", "load_bin", "save_bin", "detect_patches", "DetectionResult",
-    # maps
+    "detect", "load_bin", "save_bin", "DetectionResult",
     "read_map", "read_map_decoded", "write_map", "write_map_encoded",
-    "read_rev_limit", "write_rev_limit",
-    "compute_checksum", "verify_checksum",
+    "read_axis", "read_scalar", "write_scalar",
+    "compute_sum", "verify_checksum", "apply_checksum",
     "compare_roms", "diff_summary", "DiffByte",
-    # roms
     "ROMVariant", "MapDef", "ALL_VARIANTS",
-    "ROM_7A_LATE", "ROM_7A_EARLY", "ROM_AAH",
-    "_ign_decode", "_ign_encode", "_rpm_decode",
+    "ROM_266D", "ROM_266B", "ROM_AAH",
+    "unscramble_034", "unscramble_byte",
+    "fuel_266d_decode", "fuel_266d_encode",
+    "fuel_lambda_decode", "fuel_lambda_encode",
+    "timing_decode", "timing_encode",
+    "RPM_AXIS_266D", "RPM_AXIS_266B", "TIMING_RPM_AXIS",
+    "LOAD_AXIS", "RPM_AXIS_AAH", "LOAD_AXIS_AAH",
+    "CHECKSUM_PARAMS",
 ]
