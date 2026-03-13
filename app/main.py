@@ -258,7 +258,18 @@ class MafPatchDialog(QDialog):
         self._buttons: dict[str, QRadioButton] = {}
         btn_group = QButtonGroup(self)
 
+        last_group = None
         for key, p in hr.MAF_PROFILES.items():
+            # Group separator heading
+            group = p.get("group", "")
+            if group != last_group:
+                grp_lbl = QLabel(group)
+                grp_lbl.setStyleSheet(
+                    "color:#666; font-size:10px; text-transform:uppercase; "
+                    "letter-spacing:1px; padding:4px 0 2px 2px;")
+                layout.addWidget(grp_lbl)
+                last_group = group
+
             row = QFrame()
             row.setStyleSheet(
                 "background:#1a1a1a; border:1px solid #333; "
@@ -323,6 +334,12 @@ class MafPatchDialog(QDialog):
             detail_col.setSpacing(2)
             detail_col.setContentsMargins(0, 0, 0, 0)
             detail_col.addWidget(detail)
+            if p.get("note"):
+                note_lbl = QLabel(
+                    f"<span style='color:#888; font-size:10px;'>⚠ {p['note']}</span>",
+                    textFormat=Qt.RichText)
+                note_lbl.setWordWrap(True)
+                detail_col.addWidget(note_lbl)
             detail_col.addWidget(badge_widget)
             detail_container = QWidget()
             detail_container.setLayout(detail_col)
