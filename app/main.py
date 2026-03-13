@@ -281,12 +281,16 @@ class MapTab(QWidget):
 
     def _encode(self, text: str):
         try:
+            v = float(text)
             if self.map_def.encode:
-                return max(0, min(255, int(round(self.map_def.encode(float(text))))))
-            v = int(float(text))
-            if self._is_timing and v < 0:
-                v = v & 0xFF
-            return max(0, min(255, v))
+                # Always pass a numeric type the encode function can handle.
+                # timing_encode uses & 0xFF so needs int; lambda encodes need float.
+                raw = self.map_def.encode(v)
+                return max(0, min(255, int(round(raw)) & 0xFF))
+            iv = int(v)
+            if iv < 0:
+                iv = iv & 0xFF   # two's complement for signed maps (e.g. timing trim)
+            return max(0, min(255, iv))
         except (ValueError, TypeError):
             return None
 

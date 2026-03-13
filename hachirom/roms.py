@@ -73,8 +73,8 @@ def fuel_lambda_encode(lam: float) -> int:
 def timing_decode(v: int) -> int:
     return v if v < 128 else v - 256
 
-def timing_encode(deg: int) -> int:
-    return deg & 0xFF
+def timing_encode(deg) -> int:
+    return int(deg) & 0xFF
 
 
 # ---------------------------------------------------------------------------
