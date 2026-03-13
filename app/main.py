@@ -1,5 +1,5 @@
 """
-HachiROM — Desktop GUI  v{version}
+HachiROM — Desktop GUI
 Cross-platform PyQt5 map editor / compare tool for Hitachi ECU ROMs.
 Standalone — no Teensy or serial connection required.
 """
@@ -46,11 +46,41 @@ def timing_colour(raw_byte: int) -> QColor:
     lo, hi = -10, 40
     return heat_colour(max(lo, min(hi, signed + 10)), 0, 50)
 
-
-def _colour_item(item: QTableWidgetItem, colour: QColor):
+def _colour_item(item: QTableWidgetItem, colour: QColor, changed: bool = False):
     item.setBackground(QBrush(colour))
     brightness = colour.red() * 0.299 + colour.green() * 0.587 + colour.blue() * 0.114
     item.setForeground(QBrush(QColor("#111") if brightness > 140 else QColor("#eee")))
+    if changed:
+        # Green border via font — we use a custom property stored in the item
+        item.setData(Qt.UserRole, "changed")
+    else:
+        item.setData(Qt.UserRole, None)
+
+
+# ---------------------------------------------------------------------------
+# Changed-cell delegate — draws green border on edited cells
+# ---------------------------------------------------------------------------
+
+from PyQt5.QtWidgets import QStyledItemDelegate
+from PyQt5.QtGui import QPainter, QPen
+from PyQt5.QtCore import QRect
+
+class ChangedCellDelegate(QStyledItemDelegate):
+    """Draws a green border around cells whose UserRole == 'changed'."""
+
+    BORDER_COLOUR = QColor("#2dff6e")
+    BORDER_WIDTH  = 2
+
+    def paint(self, painter: QPainter, option, index):
+        super().paint(painter, option, index)
+        if index.data(Qt.UserRole) == "changed":
+            painter.save()
+            pen = QPen(self.BORDER_COLOUR, self.BORDER_WIDTH)
+            painter.setPen(pen)
+            # Inset rect slightly so border doesn't overlap neighbours
+            r = option.rect.adjusted(1, 1, -1, -1)
+            painter.drawRect(r)
+            painter.restore()
 
 
 # ---------------------------------------------------------------------------
@@ -70,7 +100,6 @@ class SaveConfirmDialog(QDialog):
         cs_tgt = variant.checksum.get("target", 0)
         cs_ok  = cs_sum == cs_tgt
         delta  = cs_sum - cs_tgt
-
         cs_colour = "#2dff6e" if cs_ok else "#ff9900"
         cs_text   = "✓  VALID" if cs_ok else f"⚠  INVALID  (delta {delta:+,})"
 
@@ -88,8 +117,8 @@ class SaveConfirmDialog(QDialog):
             cs_lay.addWidget(lbl)
 
         rl("Checksum", cs_text, cs_colour)
-        rl("Byte sum", f"{cs_sum:,}")
-        rl("Target",   f"{cs_tgt:,}")
+        rl("Byte sum",  f"{cs_sum:,}")
+        rl("Target",    f"{cs_tgt:,}")
         if not cs_ok:
             rl("Delta", f"{delta:+,}", "#ff9900")
 
@@ -114,12 +143,11 @@ class SaveConfirmDialog(QDialog):
         fl = QVBoxLayout(file_box)
         fl.setSpacing(3)
 
-        if mode == "27c512":
-            size_str = "65,536 bytes (64 KB)"
-            note_str = "Lower 32KB: 0xFF (erased pad)  |  Upper 32KB: ROM"
-        else:
-            size_str = f"{len(data):,} bytes (32 KB)"
-            note_str = "Native 32KB ROM — Teensy SD card / emulator"
+        size_str = ("65,536 bytes (64 KB)" if mode == "27c512"
+                    else f"{len(data):,} bytes (32 KB)")
+        note_str = ("Lower 32KB: 0xFF (erased pad)  |  Upper 32KB: ROM"
+                    if mode == "27c512"
+                    else "Native 32KB ROM — Teensy SD card / emulator")
 
         def fl_row(label, value):
             lbl = QLabel(f"<b style='color:#888'>{label}&nbsp;&nbsp;</b>"
@@ -157,47 +185,57 @@ class SaveConfirmDialog(QDialog):
 
 
 # ---------------------------------------------------------------------------
-# Map tab — heatmap table, fully editable
+# Map tab
 # ---------------------------------------------------------------------------
 
 class MapTab(QWidget):
     """
-    Each MapTab holds its OWN local copy of the map's raw bytes.
-    On save, MainWindow calls collect_all_edits() which calls
-    flush_to_rom() on every tab, writing changes back into current_data.
-    This avoids the itemChanged / blockSignals race across multiple tabs.
+    Editable heatmap for one ROM map.
+
+    _baseline[r][c]  — raw byte when ROM was opened (never changes)
+    _local[r][c]     — current edited value (written to ROM on flush)
+
+    Green border drawn on any cell where _local != _baseline.
     """
 
     def __init__(self, map_def, rom_data: bytearray, parent=None):
         super().__init__(parent)
-        self.map_def   = map_def
-        self.rom_data  = rom_data          # shared ROM bytearray — flush writes here
+        self.map_def  = map_def
+        self.rom_data = rom_data
         self._is_timing = any(k in map_def.name.lower()
                               for k in ("timing", "knock"))
-        # Local copy of this map's raw bytes — table edits go here first
+
         addr, rows, cols = map_def.address, map_def.rows, map_def.cols
-        self._local = [
-            [rom_data[addr + r * cols + c] if (addr + r * cols + c) < len(rom_data) else 0
-             for c in range(cols)]
-            for r in range(rows)
-        ]
+
+        def _read(r, c):
+            off = addr + r * cols + c
+            return rom_data[off] if off < len(rom_data) else 0
+
+        # Baseline = snapshot of ROM bytes at open time
+        self._baseline = [[_read(r, c) for c in range(cols)] for r in range(rows)]
+        # Local copy — edits land here
+        self._local    = [[_read(r, c) for c in range(cols)] for r in range(rows)]
+
         self._build_ui()
+
+    # ── UI ───────────────────────────────────────────────────────────────────
 
     def _build_ui(self):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(6, 6, 6, 6)
 
-        addr_str = f"0x{self.map_def.address:04X}"
-        dims = (f"{self.map_def.rows}×{self.map_def.cols}"
-                if self.map_def.is_2d else f"1×{self.map_def.cols}")
         info = QLabel(
             f"<b>{self.map_def.name}</b>  ·  "
-            f"Addr: <code>{addr_str}</code>  ·  {dims}  ·  "
+            f"Addr: <code>0x{self.map_def.address:04X}</code>  ·  "
+            f"{self.map_def.rows}×{self.map_def.cols}  ·  "
             f"{self.map_def.unit or ''}  —  {self.map_def.description}"
         )
         info.setWordWrap(True)
         info.setStyleSheet("color:#aaa; font-size:11px; padding:2px 0;")
-        hint = QLabel("Double-click a cell to edit  ·  Enter/Tab to confirm  ·  Esc to cancel")
+        hint = QLabel(
+            "Double-click to edit  ·  Enter/Tab to confirm  ·  Esc to cancel  ·  "
+            "<span style='color:#2dff6e'>■</span> = changed from disk")
+        hint.setTextFormat(Qt.RichText)
         hint.setStyleSheet("color:#555; font-size:10px;")
         hdr = QHBoxLayout()
         hdr.addWidget(info, 1)
@@ -212,6 +250,7 @@ class MapTab(QWidget):
         self.table.setEditTriggers(
             QTableWidget.DoubleClicked | QTableWidget.SelectedClicked)
         self.table.setSelectionMode(QTableWidget.SingleSelection)
+        self.table.setItemDelegate(ChangedCellDelegate(self.table))
         layout.addWidget(self.table)
 
         if self.map_def.rpm_axis:
@@ -222,10 +261,11 @@ class MapTab(QWidget):
                 [str(v) for v in self.map_def.load_axis[:cols]])
 
         self._populate_table()
-        # Connect AFTER initial population to avoid spurious signals
         self.table.itemChanged.connect(self._on_cell_changed)
 
-    def _decode(self, raw: int):
+    # ── Encode / decode ───────────────────────────────────────────────────────
+
+    def _decode(self, raw: int) -> str:
         if self.map_def.decode:
             v = self.map_def.decode(raw)
             return f"{v:.3f}" if isinstance(v, float) else str(v)
@@ -237,13 +277,14 @@ class MapTab(QWidget):
                 return max(0, min(255, int(round(self.map_def.encode(float(text))))))
             v = int(float(text))
             if self._is_timing and v < 0:
-                v = v & 0xFF          # two's complement wrap for negative timing
+                v = v & 0xFF
             return max(0, min(255, v))
         except (ValueError, TypeError):
             return None
 
+    # ── Table population ──────────────────────────────────────────────────────
+
     def _populate_table(self):
-        """Fill table from _local — no signals."""
         self.table.blockSignals(True)
         rows, cols = self.map_def.rows, self.map_def.cols
         all_raw = [self._local[r][c] for r in range(rows) for c in range(cols)]
@@ -251,54 +292,69 @@ class MapTab(QWidget):
 
         for r in range(rows):
             for c in range(cols):
-                raw = self._local[r][c]
-                item = QTableWidgetItem(self._decode(raw))
+                raw     = self._local[r][c]
+                changed = raw != self._baseline[r][c]
+                item    = QTableWidgetItem(self._decode(raw))
                 item.setTextAlignment(Qt.AlignCenter)
-                colour = (timing_colour(raw) if self._is_timing
-                          else heat_colour(raw, vmin, vmax))
-                _colour_item(item, colour)
+                colour  = (timing_colour(raw) if self._is_timing
+                           else heat_colour(raw, vmin, vmax))
+                _colour_item(item, colour, changed)
                 if self._is_timing:
                     signed = raw if raw < 128 else raw - 256
                     item.setToolTip(f"raw={raw}  →  {signed:+d}° BTDC")
                 self.table.setItem(r, c, item)
         self.table.blockSignals(False)
 
+    # ── Cell edit ─────────────────────────────────────────────────────────────
+
     def _on_cell_changed(self, item: QTableWidgetItem):
         r, c = item.row(), item.column()
-        raw = self._encode(item.text())
+        raw  = self._encode(item.text())
+
         if raw is None:
-            # Bad input — revert display to current _local value
+            # Bad input — revert
             self.table.blockSignals(True)
             item.setText(self._decode(self._local[r][c]))
             self.table.blockSignals(False)
             return
-        # Store in local copy
+
         self._local[r][c] = raw
-        # Recolour immediately
+        changed = raw != self._baseline[r][c]
+
+        # Recolour and mark changed border
         self.table.blockSignals(True)
         all_raw = [self._local[rr][cc]
                    for rr in range(self.map_def.rows)
                    for cc in range(self.map_def.cols)]
         colour = (timing_colour(raw) if self._is_timing
                   else heat_colour(raw, min(all_raw), max(all_raw)))
-        _colour_item(item, colour)
+        _colour_item(item, colour, changed)
         if self._is_timing:
             signed = raw if raw < 128 else raw - 256
             item.setToolTip(f"raw={raw}  →  {signed:+d}° BTDC")
         self.table.blockSignals(False)
 
+    # ── Flush ─────────────────────────────────────────────────────────────────
+
     def flush_to_rom(self):
-        """Write _local back into the shared rom_data bytearray."""
+        """Write _local into the shared rom_data bytearray."""
         addr, rows, cols = self.map_def.address, self.map_def.rows, self.map_def.cols
         for r in range(rows):
             for c in range(cols):
-                offset = addr + r * cols + c
-                if offset < len(self.rom_data):
-                    self.rom_data[offset] = self._local[r][c]
+                off = addr + r * cols + c
+                if off < len(self.rom_data):
+                    self.rom_data[off] = self._local[r][c]
+
+    def changed_count(self) -> int:
+        rows, cols = self.map_def.rows, self.map_def.cols
+        return sum(
+            1 for r in range(rows) for c in range(cols)
+            if self._local[r][c] != self._baseline[r][c]
+        )
 
 
 # ---------------------------------------------------------------------------
-# Compare tab
+# Compare tab  — can be pre-loaded programmatically
 # ---------------------------------------------------------------------------
 
 class CompareTab(QWidget):
@@ -306,6 +362,8 @@ class CompareTab(QWidget):
         super().__init__(parent)
         self.data_a: bytes = b""
         self.data_b: bytes = b""
+        self.label_a = "ROM A"
+        self.label_b = "ROM B"
         self._build_ui()
 
     def _build_ui(self):
@@ -321,7 +379,7 @@ class CompareTab(QWidget):
         btn_cmp = QPushButton("⊕  Compare")
         btn_a.clicked.connect(self._load_a)
         btn_b.clicked.connect(self._load_b)
-        btn_cmp.clicked.connect(self._run_compare)
+        btn_cmp.clicked.connect(self.run_compare)
         load_row.addWidget(btn_a)
         load_row.addWidget(self.lbl_a, 1)
         load_row.addWidget(btn_b)
@@ -331,8 +389,26 @@ class CompareTab(QWidget):
         self.result = QTextEdit()
         self.result.setReadOnly(True)
         self.result.setFont(QFont("Consolas", 9))
-        self.result.setPlaceholderText("Load two ROMs and click Compare.")
+        self.result.setPlaceholderText(
+            "Load two ROMs and click Compare  —  or use Commit in the toolbar.")
         layout.addWidget(self.result)
+
+    def load_pair(self, data_a: bytes, label_a: str,
+                        data_b: bytes, label_b: str):
+        """Pre-load both sides programmatically and run the compare."""
+        self.data_a, self.label_a = data_a, label_a
+        self.data_b, self.label_b = data_b, label_b
+        r_a = hr.detect(data_a)
+        r_b = hr.detect(data_b)
+        self.lbl_a.setText(
+            f"ROM A: {label_a}  "
+            f"[{r_a.variant.name if r_a.variant else 'Unknown'}  {r_a.crc32:#010x}]")
+        self.lbl_a.setStyleSheet("color:#2dff6e; font-size:11px;")
+        self.lbl_b.setText(
+            f"ROM B: {label_b}  "
+            f"[{r_b.variant.name if r_b.variant else 'Unknown'}  {r_b.crc32:#010x}]")
+        self.lbl_b.setStyleSheet("color:#aaa; font-size:11px;")
+        self.run_compare()
 
     def _load_file(self, title):
         path, _ = QFileDialog.getOpenFileName(
@@ -347,28 +423,33 @@ class CompareTab(QWidget):
     def _load_a(self):
         data, path = self._load_file("Load ROM A")
         if data is None: return
-        self.data_a = data
+        self.data_a  = data
+        self.label_a = Path(path).name
         r = hr.detect(data)
-        self.lbl_a.setText(f"ROM A: {Path(path).name}  "
-                           f"[{r.variant.name if r.variant else 'Unknown'}  {r.crc32:#010x}]")
+        self.lbl_a.setText(
+            f"ROM A: {self.label_a}  "
+            f"[{r.variant.name if r.variant else 'Unknown'}  {r.crc32:#010x}]")
         self.lbl_a.setStyleSheet("color:#2dff6e; font-size:11px;")
 
     def _load_b(self):
         data, path = self._load_file("Load ROM B")
         if data is None: return
-        self.data_b = data
+        self.data_b  = data
+        self.label_b = Path(path).name
         r = hr.detect(data)
-        self.lbl_b.setText(f"ROM B: {Path(path).name}  "
-                           f"[{r.variant.name if r.variant else 'Unknown'}  {r.crc32:#010x}]")
-        self.lbl_b.setStyleSheet("color:#00d4ff; font-size:11px;")
+        self.lbl_b.setText(
+            f"ROM B: {self.label_b}  "
+            f"[{r.variant.name if r.variant else 'Unknown'}  {r.crc32:#010x}]")
+        self.lbl_b.setStyleSheet("color:#aaa; font-size:11px;")
 
-    def _run_compare(self):
+    def run_compare(self):
         if not self.data_a or not self.data_b:
             QMessageBox.warning(self, "HachiROM", "Load both ROMs first.")
             return
         ra    = hr.detect(self.data_a)
         diffs = hr.compare_roms(self.data_a, self.data_b, ra.variant)
         summary = hr.diff_summary(diffs)
+
         lines = [f"ROM COMPARE — {len(diffs)} byte(s) differ", ""]
         if summary:
             lines += ["CHANGED BYTES BY MAP REGION", "-" * 50]
@@ -378,8 +459,9 @@ class CompareTab(QWidget):
         lines.append(f"  {'ADDR':>6}  {'A':>3}  {'B':>3}  {'Δ':>4}  MAP REGION")
         lines.append("  " + "-" * 58)
         for d in diffs[:300]:
-            lines.append(f"  0x{d.address:04X}  {d.a:>3}  {d.b:>3}  "
-                         f"{d.b - d.a:>+4}  {d.map_name or '—'}")
+            lines.append(
+                f"  0x{d.address:04X}  {d.a:>3}  {d.b:>3}  "
+                f"{d.b - d.a:>+4}  {d.map_name or '—'}")
         if len(diffs) > 300:
             lines.append(f"  … {len(diffs) - 300} more not shown")
         self.result.setPlainText("\n".join(lines))
@@ -452,13 +534,17 @@ class MainWindow(QMainWindow):
         super().__init__()
         self.setWindowTitle(f"HachiROM  v{APP_VERSION}")
         self.resize(1280, 820)
-        self.current_data:   bytearray = bytearray()
-        self.current_path:   str = ""
-        self.current_variant = None
-        self._map_tabs: list[MapTab] = []   # track all open MapTabs for flush
+        self.current_data:    bytearray = bytearray()
+        self.current_path:    str = ""
+        self.current_variant  = None
+        self._original_data:  bytes = b""   # snapshot at open time — never mutated
+        self._map_tabs:       list[MapTab] = []
+        self._compare_tab_idx: int = -1
         self._build_menu()
         self._build_ui()
         self._apply_dark_theme()
+
+    # ── Menu ─────────────────────────────────────────────────────────────────
 
     def _build_menu(self):
         mb = self.menuBar()
@@ -477,6 +563,8 @@ class MainWindow(QMainWindow):
         hm = mb.addMenu("Help")
         hm.addAction("About HachiROM", self._about)
 
+    # ── UI ───────────────────────────────────────────────────────────────────
+
     def _build_ui(self):
         central = QWidget()
         self.setCentralWidget(central)
@@ -488,20 +576,36 @@ class MainWindow(QMainWindow):
         self.lbl_file = QLabel(
             "No ROM loaded — File → Open ROM…  (accepts .bin and .034)")
         self.lbl_file.setStyleSheet("color:#666; font-size:11px;")
+
         btn_open = QPushButton("Open ROM…")
         btn_open.clicked.connect(self.open_rom)
+
+        self.btn_commit = QPushButton("⬤  Commit")
+        self.btn_commit.setToolTip(
+            "Flush all edits, refresh checksum, and view diff vs original in Compare tab")
+        self.btn_commit.setStyleSheet(
+            "QPushButton{background:#1e4d1e;color:#2dff6e;border:1px solid #2dff6e;"
+            "padding:5px 14px;border-radius:3px;}"
+            "QPushButton:hover{background:#2a6b2a;}"
+            "QPushButton:disabled{background:#2d2d2d;color:#555;border-color:#555;}"
+        )
+        self.btn_commit.clicked.connect(self.commit_edits)
+        self.btn_commit.setEnabled(False)
+
         self.btn_save = QPushButton("Save .bin…")
         self.btn_save.clicked.connect(self.save_rom)
         self.btn_save.setEnabled(False)
+
         self.btn_save512 = QPushButton("Save 27C512 .bin…")
         self.btn_save512.setToolTip(
             "64KB image for EPROM programmers\n"
-            "Lower 32KB = 0xFF  |  Upper 32KB = ROM data\n"
-            "Compatible with 27C512 chips in Hitachi ECUs")
+            "Lower 32KB = 0xFF pad  |  Upper 32KB = ROM data")
         self.btn_save512.clicked.connect(self.save_27c512)
         self.btn_save512.setEnabled(False)
+
         top.addWidget(self.lbl_file, 1)
         top.addWidget(btn_open)
+        top.addWidget(self.btn_commit)
         top.addWidget(self.btn_save)
         top.addWidget(self.btn_save512)
         root.addLayout(top)
@@ -522,16 +626,18 @@ class MainWindow(QMainWindow):
             "  893906266B — 7A Early (Audi 90 / Coupe Quattro 2.3 20v, 2-connector)\n"
             "  4A0906266  — AAH 12v  (Audi 100 / A6 / S4 2.8L V6)\n\n"
             "Double-click any map cell to edit.\n"
-            "Checksum is corrected automatically on save."
+            "Changed cells get a green border.  Commit to review vs original."
         )
         welcome.setAlignment(Qt.AlignCenter)
         welcome.setStyleSheet("color:#555; font-size:13px;")
         self.tabs.addTab(welcome, "Welcome")
+
         self.compare_tab = CompareTab()
-        self.tabs.addTab(self.compare_tab, "⊕ Compare")
+        self._compare_tab_idx = self.tabs.addTab(self.compare_tab, "⊕ Compare")
+
         self.statusBar().showMessage(f"HachiROM v{APP_VERSION} ready")
 
-    # ── ROM open ─────────────────────────────────────────────────────────────
+    # ── ROM open ──────────────────────────────────────────────────────────────
 
     def open_rom(self):
         path, _ = QFileDialog.getOpenFileName(
@@ -543,8 +649,9 @@ class MainWindow(QMainWindow):
             data = hr.load_bin(path)
             if path.lower().endswith(".034"):
                 data = hr.unscramble_034(data)
-            self.current_data = bytearray(data)
-            self.current_path = path
+            self._original_data = bytes(data)        # immutable baseline
+            self.current_data   = bytearray(data)    # working copy
+            self.current_path   = path
             self._load_rom(path)
         except Exception as e:
             QMessageBox.critical(self, "Open Error", str(e))
@@ -555,14 +662,16 @@ class MainWindow(QMainWindow):
         self.current_variant = result.variant
 
         variant_name = result.variant.name if result.variant else "Unknown variant"
-        cs_ok = (hr.verify_checksum(data, result.variant) if result.variant else False)
-        cs_str = "✓ checksum OK" if cs_ok else "⚠ checksum invalid"
+        cs_ok = hr.verify_checksum(data, result.variant) if result.variant else False
         self.lbl_file.setText(
             f"{Path(path).name}  ·  {variant_name}  ·  "
-            f"CRC32 {result.crc32:#010x}  ·  {cs_str}")
+            f"CRC32 {result.crc32:#010x}  ·  "
+            f"{'✓ checksum OK' if cs_ok else '⚠ checksum invalid'}")
         self.lbl_file.setStyleSheet(
             "color:#2dff6e; font-size:11px;" if cs_ok
             else "color:#ff9900; font-size:11px;")
+
+        self.btn_commit.setEnabled(True)
         self.btn_save.setEnabled(True)
         self.btn_save512.setEnabled(True)
 
@@ -589,16 +698,57 @@ class MainWindow(QMainWindow):
             self.tabs.addTab(lbl, "Unknown")
 
         self.compare_tab = CompareTab()
-        self.tabs.addTab(self.compare_tab, "⊕ Compare")
+        self._compare_tab_idx = self.tabs.addTab(self.compare_tab, "⊕ Compare")
+
         self.info_panel.update_rom(data)
         self.statusBar().showMessage(
             f"Loaded {Path(path).name}  ·  {variant_name}  ·  "
             f"confidence: {result.confidence}")
 
-    # ── Save helpers ─────────────────────────────────────────────────────────
+    # ── Commit ────────────────────────────────────────────────────────────────
+
+    def commit_edits(self):
+        """Flush all tab edits → current_data, refresh info, load compare."""
+        self._collect_edits()
+
+        # Count total changed bytes across all tabs
+        total_changed = sum(t.changed_count() for t in self._map_tabs)
+
+        # Refresh info panel with live (post-edit) data
+        self.info_panel.update_rom(bytes(self.current_data))
+
+        # Update header checksum indicator
+        if self.current_variant:
+            cs_ok = hr.verify_checksum(bytes(self.current_data), self.current_variant)
+            name  = Path(self.current_path).name
+            result = hr.detect(bytes(self.current_data))
+            self.lbl_file.setText(
+                f"{name}  ·  {self.current_variant.name}  ·  "
+                f"CRC32 {result.crc32:#010x}  ·  "
+                f"{'✓ checksum OK' if cs_ok else '⚠ will fix on save'}"
+                f"  ·  {total_changed} cell(s) edited")
+            self.lbl_file.setStyleSheet(
+                "color:#2dff6e; font-size:11px;" if cs_ok
+                else "color:#ff9900; font-size:11px;")
+
+        # Load compare: committed state = ROM A,  original disk = ROM B
+        committed_label = f"committed  ({total_changed} edits)"
+        original_label  = f"{Path(self.current_path).name}  (original)"
+        self.compare_tab.load_pair(
+            bytes(self.current_data), committed_label,
+            self._original_data,      original_label,
+        )
+
+        # Switch to Compare tab
+        self.tabs.setCurrentIndex(self._compare_tab_idx)
+
+        self.statusBar().showMessage(
+            f"Committed — {total_changed} cell(s) changed vs original  ·  "
+            f"Compare tab updated")
+
+    # ── Save helpers ──────────────────────────────────────────────────────────
 
     def _collect_edits(self):
-        """Flush all MapTab local caches into current_data before saving."""
         for tab in self._map_tabs:
             tab.flush_to_rom()
 
@@ -609,8 +759,7 @@ class MainWindow(QMainWindow):
             return hr.apply_checksum(raw, self.current_variant)
         return bytearray(raw)
 
-    def _pre_save(self, mode: str) -> tuple[str | None, bytearray | None]:
-        """Common guard + dialog. Returns (path, corrected_data) or (None, None)."""
+    def _pre_save(self, mode: str):
         if not self.current_data:
             QMessageBox.warning(self, "HachiROM", "No ROM loaded.")
             return None, None
@@ -626,7 +775,7 @@ class MainWindow(QMainWindow):
         if not path:
             return None, None
 
-        self._collect_edits()   # flush before showing checksum in dialog
+        self._collect_edits()
 
         if self.current_variant:
             dlg = SaveConfirmDialog(
@@ -639,8 +788,7 @@ class MainWindow(QMainWindow):
 
     def save_rom(self):
         path, rom32 = self._pre_save("bin")
-        if path is None:
-            return
+        if path is None: return
         try:
             hr.save_bin(bytes(rom32), path)
             self.statusBar().showMessage(f"Saved → {Path(path).name}")
@@ -649,8 +797,7 @@ class MainWindow(QMainWindow):
 
     def save_27c512(self):
         path, rom32 = self._pre_save("27c512")
-        if path is None:
-            return
+        if path is None: return
         try:
             image = bytes([0xFF] * 32768) + bytes(rom32)
             hr.save_bin(image, path)
