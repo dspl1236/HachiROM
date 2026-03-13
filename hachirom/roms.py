@@ -82,7 +82,7 @@ LOAD_AXIS_AAH   = [12.6,18.8,23.5,28.2,32.9,38.4,43.9,50.2,56.5,62.8,69.0,75.3,8
 #
 #   Group B — Bosch 1.8T sensor (5-pin with integrated IAT, no CO pot)
 #   ⚠ EXPERIMENTAL — axis values unverified on engine:
-#     sensor_1_8t_57    1.8T sensor in 57mm 1.8T housing
+#     sensor_1_8t_60    1.8T sensor in 60mm 1.8T housing
 #     sensor_1_8t_vr6   1.8T sensor in 69.85mm VR6/TT225 housing
 #
 # CO pot — pin 4 wiring (source: 20v-sauger-tuning.de; verified against
@@ -149,13 +149,15 @@ MAF_AXIS_LEN         = 16       # 16 breakpoints
 #     Does NOT fit: 1.8T or VR6/TT225 housings (different internal geometry)
 #
 #   Bosch 1.8T (0280218114)       — 3-pin, no CO pot
-#     Fits: 57mm 1.8T housing, 69.85mm VR6/TT225 housing
+#     Fits: 60mm 1.8T housing, 69.85mm VR6/TT225 housing
 #     Does NOT fit: 50mm or 74mm VAG housings (different internal geometry)
 #
 # This gives exactly four valid hardware combinations:
 #
 #   stock_7a          7A sensor  + 50mm housing   — stock, CO pot retained
 #   aah_v6_housing    7A sensor  + 74mm AAH housing — CO pot retained, ROM patch needed
+#   sensor_1_8t_60    1.8T sensor + 60mm 1.8T housing — CO pot wiring required
+#   sensor_1_8t_vr6   1.8T sensor + 69.85mm VR6/TT225 housing — CO pot wiring required
 #   sensor_1_8t_57    1.8T sensor + 57mm 1.8T housing  — 3-wire, external CO pot
 #   sensor_1_8t_vr6   1.8T sensor + 69.85mm VR6 housing — 3-wire, external CO pot
 
@@ -184,14 +186,15 @@ MAF_AXIS_AAH_V6     = [4, 8, 16, 25, 41, 51, 62, 72, 95, 108, 119, 132, 185, 200
 # 3-wire sensor — no integrated CO pot.
 # Requires external pot wiring on ECU pin 4 (see CO pot note in header comment).
 
-# 1.8T sensor in 57mm 1.8T housing
-# Bore: 57mm, flow area: 2551.8 mm²
-# Axis derived from published 1.8T transfer function data for this housing.
+# 1.8T sensor in 60mm 1.8T housing
+# Bore: 60mm, flow area: 2827.4 mm²
+# Axis derived from VR6/TT225 axis via King's law bore area scaling.
 # Compared to VR6/TT225 housing: smaller bore → higher air velocity → higher voltage
-#   Velocity ratio (57mm vs 69.85mm): 3832.0 / 2551.8 = 1.5017
-#   King's law voltage scale: sqrt(1.5017) = 1.2254
+#   Area ratio (vr6/60mm): 3832.0 / 2827.4 = 1.3553
+#   King's law voltage scale: sqrt(1.3553) = 1.1642
+# NOTE: bore confirmed by user physical measurement (60mm ID).
 # NOTE: verify against a wideband before road use.
-MAF_AXIS_1_8T_57    = [5, 10, 20, 33, 56, 69, 85, 99, 131, 150, 168, 186, 246, 255, 255, 255]
+MAF_AXIS_1_8T_60    = [5, 9, 19, 31, 54, 65, 80, 94, 125, 142, 159, 177, 234, 255, 255, 255]
 
 # 1.8T sensor in VR6 / TT225 housing (69.85mm / 2.75")
 # Bore: 69.85mm, flow area: 3832.0 mm²
@@ -224,18 +227,18 @@ MAF_PROFILES: dict = {
         "plug_play":     True,
     },
     # ── Group B — Bosch 1.8T sensor ⚠ EXPERIMENTAL ───────────────────────
-    "sensor_1_8t_57":   {
-        "label":        "⚠ 1.8T sensor + 1.8T housing  (57mm)  [EXPERIMENTAL]",
+    "sensor_1_8t_60":   {
+        "label":        "⚠ 1.8T sensor + 1.8T housing  (60mm)  [EXPERIMENTAL]",
         "group":        "Bosch 1.8T sensor  (5-pin, IAT integrated — CO pot wiring required)  ⚠ EXPERIMENTAL",
-        "axis":          MAF_AXIS_1_8T_57,
+        "axis":          MAF_AXIS_1_8T_60,
         "housing":      "Stock 1.8T MAF housing — Bosch 0280218114",
         "hp_note":      "Mild–moderate power upgrade",
         "co_pot":        False,
         "plug_play":     False,
         "experimental":  True,
         "note":         "EXPERIMENTAL — axis unverified on engine. "
-                        "Housing bore unconfirmed (community measurement ~60.3mm, "
-                        "not 57mm — recalculation needed). "
+                        "Bore confirmed 60mm (user measurement). "
+                        "Axis derived via King's law from VR6 axis (area ratio 1.3553, scale 1.1642). "
                         "CO pot pin 4 must be held at neutral voltage (see docs). "
                         "1.8T IAT pins (sensor pin 1 / pin 4) leave unconnected. "
                         "Verify fuelling with wideband before road use.",

@@ -38,7 +38,7 @@ from .roms   import (ROMVariant, MapDef, ALL_VARIANTS,
                      LOAD_AXIS, RPM_AXIS_AAH, LOAD_AXIS_AAH,
                      CHECKSUM_PARAMS,
                      MAF_PROFILES, MAF_AXIS_STOCK_7A, MAF_AXIS_AAH_V6,
-                     MAF_AXIS_1_8T_57, MAF_AXIS_1_8T_VR6,
+                     MAF_AXIS_1_8T_60, MAF_AXIS_1_8T_VR6,
                      MAF_AXIS_ADDR_FUEL, MAF_AXIS_ADDR_TIMING)
 
 __version__ = "0.4.0"
@@ -60,6 +60,6 @@ __all__ = [
     "LOAD_AXIS", "RPM_AXIS_AAH", "LOAD_AXIS_AAH",
     "CHECKSUM_PARAMS",
     "MAF_PROFILES", "MAF_AXIS_STOCK_7A", "MAF_AXIS_AAH_V6",
-    "MAF_AXIS_1_8T_57", "MAF_AXIS_1_8T_VR6",
+    "MAF_AXIS_1_8T_60", "MAF_AXIS_1_8T_VR6",
     "MAF_AXIS_ADDR_FUEL", "MAF_AXIS_ADDR_TIMING",
 ]

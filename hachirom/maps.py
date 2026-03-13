@@ -185,7 +185,7 @@ def detect_maf_patch(data: bytes) -> str:
     Returns one of:
         ``"stock_7a"``        — 7A Hitachi sensor, 50mm stock housing (unmodified)
         ``"aah_v6_housing"``  — 7A Hitachi sensor transplanted into 74mm AAH V6 housing
-        ``"sensor_1_8t_57"``  — Bosch 1.8T sensor, 57mm 1.8T housing  [EXPERIMENTAL]
+        ``"sensor_1_8t_60"``  — Bosch 1.8T sensor, 60mm 1.8T housing  [EXPERIMENTAL]
         ``"sensor_1_8t_vr6"`` — Bosch 1.8T sensor, 69.85mm VR6/TT225 housing  [EXPERIMENTAL]
         ``"inconsistent"``    — fuel and timing axis copies disagree (ROM may be corrupt)
         ``"unknown"``         — axis bytes don't match any known profile
