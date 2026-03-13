@@ -378,7 +378,8 @@ class MapTab(QWidget):
 class OverviewField(QWidget):
     """One labelled row: name | current value | RPM input | Apply button | status."""
 
-    changed = pyqtSignal()   # emitted when value is written to _local
+    changed  = pyqtSignal()        # emitted when value is written to _local
+    selected = pyqtSignal(object)  # emitted when this field is clicked/focused
 
     def __init__(self, map_def, rom_snapshot: bytes, parent=None):
         super().__init__(parent)
@@ -416,6 +417,7 @@ class OverviewField(QWidget):
             "background:#2a2a2a; color:#e8e8e8; border:1px solid #444; "
             "border-radius:3px; padding:3px 6px; font-size:12px;")
         self.edit.returnPressed.connect(self._apply)
+        self.edit.installEventFilter(self)
         layout.addWidget(self.edit)
 
         unit_lbl = QLabel(map_def.unit or "")
@@ -439,6 +441,16 @@ class OverviewField(QWidget):
         self.lbl_status.setStyleSheet("font-size:11px; color:#555;")
         layout.addWidget(self.lbl_status)
         layout.addStretch()
+
+    def eventFilter(self, obj, event):
+        from PyQt5.QtCore import QEvent
+        if event.type() == QEvent.FocusIn:
+            self.selected.emit(self)
+        return super().eventFilter(obj, event)
+
+    def mousePressEvent(self, event):
+        self.selected.emit(self)
+        super().mousePressEvent(event)
 
     def _ensure_tab(self):
         if self._map_tab is None:
@@ -487,8 +499,15 @@ class OverviewTab(QWidget):
         self._build_ui(variant, rom_snapshot)
 
     def _build_ui(self, variant, rom_snapshot: bytes):
-        outer = QVBoxLayout(self)
-        outer.setContentsMargins(20, 20, 20, 20)
+        # Two-column layout: left = input fields, right = tips panel
+        root = QHBoxLayout(self)
+        root.setContentsMargins(0, 0, 0, 0)
+        root.setSpacing(0)
+
+        # ── Left column ───────────────────────────────────────────────────────
+        left_widget = QWidget()
+        outer = QVBoxLayout(left_widget)
+        outer.setContentsMargins(20, 20, 12, 20)
         outer.setSpacing(0)
 
         # ── REV LIMIT section ────────────────────────────────────────────────
@@ -499,6 +518,7 @@ class OverviewTab(QWidget):
                 "The classic first EPROM edit. Change the value, "
                 "click Apply, then Save 27C512 and burn the chip."))
             field = OverviewField(rpm_maps[0], rom_snapshot)
+            field.selected.connect(self._on_field_selected)
             self._fields.append(field)
             outer.addWidget(field)
             outer.addSpacing(8)
@@ -506,20 +526,31 @@ class OverviewTab(QWidget):
         # ── ECU PARAMETERS section ───────────────────────────────────────────
         param_names = ["Injection Scaler", "CL Disable RPM", "CL RPM Limit"]
         param_maps  = [m for m in variant.maps if m.name in param_names]
-        # preserve order
         param_maps.sort(key=lambda m: param_names.index(m.name)
                         if m.name in param_names else 99)
+        has_scaler = any(m.name == "Injection Scaler" for m in variant.maps)
+
+        # Section subtitle — variant-aware
+        if not has_scaler:
+            subtitle = ("Injection Scaler is not present on this ECU variant — "
+                        "the injector pulse is fixed in firmware. "
+                        "Use the fuel map to adjust fuelling.")
+        else:
+            subtitle = ("Click a row to see tuning tips →  "
+                        "Single-byte scalars that affect the whole fuel system.")
+
         if param_maps:
             outer.addSpacing(16)
-            outer.addWidget(self._section_header(
-                "ECU PARAMETERS",
-                "Single-byte scalars. Edit carefully — these affect "
-                "the whole fuel system."))
+            outer.addWidget(self._section_header("ECU PARAMETERS", subtitle))
             for m in param_maps:
                 field = OverviewField(m, rom_snapshot)
+                field.selected.connect(self._on_field_selected)
                 self._fields.append(field)
                 outer.addWidget(field)
                 outer.addSpacing(4)
+        elif not has_scaler:
+            outer.addSpacing(16)
+            outer.addWidget(self._section_header("ECU PARAMETERS", subtitle))
 
         outer.addStretch()
 
@@ -528,9 +559,17 @@ class OverviewTab(QWidget):
             "Workflow:  Open ROM  →  edit values above  →  "
             "Save 27C512 .bin  →  burn with TL866 / T48  →  install  →  test")
         hint.setWordWrap(True)
-        hint.setStyleSheet(
-            "color:#555; font-size:11px; padding:12px 0 0 0;")
+        hint.setStyleSheet("color:#555; font-size:11px; padding:12px 0 0 0;")
         outer.addWidget(hint)
+
+        # ── Right column: tips panel ──────────────────────────────────────────
+        self._tips_panel = MapInfoPanel()
+        self._tips_panel.setFixedWidth(310)
+        self._tips_panel.setStyleSheet(
+            "background:#131313; border-left:1px solid #222;")
+
+        root.addWidget(left_widget, stretch=1)
+        root.addWidget(self._tips_panel)
 
     @staticmethod
     def _section_header(title: str, subtitle: str) -> QWidget:
@@ -551,6 +590,18 @@ class OverviewTab(QWidget):
         v.addWidget(s)
         v.addWidget(sep)
         return w
+
+    def _on_field_selected(self, field: "OverviewField"):
+        """Update the tips panel when a field is clicked or focused."""
+        self._tips_panel.update_map(
+            field.map_def.name,
+            map_def=field.map_def,
+            info=_MAP_TIPS.get(field.map_def.name))
+
+    def show_first_tip(self):
+        """Pre-populate tips panel with first field on load."""
+        if self._fields:
+            self._on_field_selected(self._fields[0])
 
     def build_patches(self) -> dict:
         """Merged patch dict from all fields."""
@@ -1480,6 +1531,7 @@ class MainWindow(QMainWindow):
             self._overview_tab = OverviewTab(result.variant, self._rom_snapshot)
             for field in self._overview_tab._fields:
                 field.changed.connect(self._on_rom_changed)
+            self._overview_tab.show_first_tip()
             self.tabs.insertTab(0, self._overview_tab, "Overview")
 
             editable = [m for m in result.variant.maps
