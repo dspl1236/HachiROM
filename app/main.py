@@ -619,17 +619,24 @@ _MAP_TIPS: dict[str, dict] = {
         "caution": None,
     },
     "RPM Limit": {
-        "what":  "Sets the fuel cut rev limiter. The ECU cuts injectors when "
-                 "RPM exceeds this value. raw×25 = RPM.",
+        "what":  "The rev limiter — ECU cuts injectors above this RPM. "
+                 "Single byte: raw × 25 = RPM. "
+                 "This is the classic first EPROM edit: one cell change, "
+                 "burn the chip, and you'll feel the result immediately.",
         "tips": [
-            "Stock AAH and 7A: raw=254 → 6350 RPM.",
-            "Stage 1 tunes often raise this to raw=255 (6375 RPM).",
-            "This is a hard fuel cut — ignition is not retarded first.",
-            "Engine must be in good condition before raising the limit.",
+            "Stock 7A and AAH: raw=254 → 6350 RPM.",
+            "Common first edit: raise to raw=255 (6375 RPM) — "
+            "matches the factory tachometer redline on most cars.",
+            "Stage 1 tunes typically use 245–255 depending on the build.",
+            "Workflow: edit this cell → Save 27C512 → burn chip → install → test.",
+            "If the engine hits the limiter cleanly and drops off sharply, "
+            "the edit worked. No stumble = correct chip orientation and "
+            "address decoding.",
         ],
-        "caution": "Over-revving causes valve float, head stud stretch, and "
-                   "potential catastrophic engine damage. Verify your build "
-                   "can handle the RPM before raising this value.",
+        "caution": "The limiter protects the engine. Only raise it if the "
+                   "valvetrain, head studs, and cooling system are in good "
+                   "condition. Valve float typically begins around 7000 RPM "
+                   "on a stock 7A/AAH.",
     },
     "Decel Cutoff": {
         "what":  "The MAP pressure threshold below which the ECU cuts "
@@ -711,14 +718,16 @@ _MAP_TIPS: dict[str, dict] = {
 }
 
 _WELCOME_PANEL = {
-    "what":  "Open a ROM file to begin. Supported formats: .bin (32KB native "
-             "or 64KB 27C512 image), .034 (scrambled). "
-             "27C512 images are automatically unwrapped.",
+    "what":  "Open a ROM file to begin. Supported formats: .bin (32KB), "
+             ".034 (scrambled), or 64KB 27C512 image — all auto-detected.",
     "tips": [
-        "Double-click any cell in a map tab to edit it.",
+        "New to EPROM tuning? Start with the RPM Limit tab — "
+        "it's one cell, the result is immediate, and it teaches the "
+        "whole edit → save → burn → test workflow.",
+        "Double-click any cell to edit. Enter or Tab to confirm, Esc to cancel.",
         "Changed cells get a green border so you can track what moved.",
-        "Save .bin flushes all edits and corrects the checksum automatically.",
-        "Save .bin for the Teensy SD card. Save 27C512 for EPROM programmers.",
+        "Save 27C512 .bin for EPROM programmers (TL866, T48, etc).",
+        "Save .bin for the Teensy SD card. Checksum is corrected automatically.",
     ],
     "caution": None,
 }
