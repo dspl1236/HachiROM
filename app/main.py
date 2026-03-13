@@ -1181,14 +1181,13 @@ class MainWindow(QMainWindow):
         self._collect_edits()
 
         try:
-            # Mirror raw edited ROM into both halves — no checksum applied here.
-            # Burn the 32KB .bin first (which corrects the checksum), then use
-            # Save 27C512 if you need the EPROM image.
-            rom32 = bytes(self.current_data[:32768])
+            # Always correct checksum before mirroring — the image should
+            # be ready to burn without any extra steps.
+            rom32 = bytes(self._corrected_32k())
             image = rom32 + rom32
             hr.save_bin(image, path)
             self.statusBar().showMessage(
-                f"Saved 27C512 → {Path(path).name}  (64 KB, mirrored, raw — use Save .bin for checksum fix)")
+                f"Saved 27C512 → {Path(path).name}  (64 KB, mirrored, checksum corrected)")
         except Exception as e:
             QMessageBox.critical(self, "Save Error", str(e))
 
