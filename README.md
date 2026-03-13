@@ -1,7 +1,7 @@
 # HachiROM
 
-**Hitachi ECU ROM editor and analysis library**  
-Source of truth for the [audi90-teensy-ecu](https://github.com/dspl1236/audi90-teensy-ecu) project.
+**Hitachi MMS ECU ROM editor — 7A 20v and AAH 12v**  
+Standalone desktop app plus Python library. No Teensy or serial connection required.
 
 [![Build HachiROM](https://github.com/dspl1236/HachiROM/actions/workflows/build.yml/badge.svg)](https://github.com/dspl1236/HachiROM/actions/workflows/build.yml)
 ![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20Linux%20%7C%20Mac-blue)
@@ -16,115 +16,156 @@ Windows `.exe`, macOS, and Linux binaries — no install required.
 
 ---
 
+## Supported ECUs — Hitachi MMS family
+
+| Part number | Hardware | Engine | Connector | Notes |
+|-------------|----------|--------|-----------|-------|
+| 893906266D  | MMS05C   | 7A 20v — 2.3L (1991–1995) | 4-pin MAF | Primary target — all patches supported |
+| 893906266B  | MMS05C   | 7A 20v — 2.3L (pre-1991)  | 2-pin MAF | Same hardware as 266D, different calibration |
+| 4A0906266   | MMS100   | AAH 12v — 2.8L V6         | MAP sensor | Separate ECU generation — maps editable, no MAF/CO pot patches |
+
+The 266D and 266B share the MMS05C hardware platform. The AAH MMS100 is a later
+generation with a different load sensing architecture (MAP-based, not MAF-based).
+
+---
+
 ## Features
 
-- 🔍 **ROM Detection** — Auto-identifies variant by hash, signature, or size
-- 🔥 **Heatmap Map Editor** — Ignition, fuel, warmup, IAT/ECT, boost, rev limit, and more
-- ⊕ **ROM Compare / Diff** — Byte-by-byte diff with map region tagging and delta values
-- ✅ **Checksum** — Compute and verify ROM checksums
-- ⚑ **Patch Detection** — Auto-detects known code patches (open loop lambda, ISV disable, etc.)
-- 💾 **BIN Save/Load** — Load and save modified `.bin` files ready for flashing
-- 📦 **Python Library** — Use as a library in other projects (e.g. Teensy companion tools)
+- 🔍 **ROM Detection** — Auto-identifies variant by signature, hash, and reset vector
+- 🗺 **Heatmap Map Editor** — Fuel and timing maps with colour-coded cell editing
+- ⊕ **ROM Compare / Diff** — Side-by-side byte diff with map region tagging and delta values
+- ✅ **Checksum** — Auto-corrected on save (verify before burn)
+- 🔧 **MAF Axis Patch** — Rescale fuel/timing axis for a different MAF housing (266D/266B)
+- 🔧 **CO Pot Disable Patch** — Suppress fault 00521 when fitting a no-CO-pot sensor (266D)
+- 💾 **Multi-format Save** — 32KB `.bin` (Teensy), 64KB 27C512 `.bin` (EPROM programmer)
+- 📦 **Python Library** — Use as a library in other projects
 
 ---
 
-## Supported ECUs
+## ROM Formats
 
-| ECU | Chip | Engine | Notes |
-|-----|------|--------|-------|
-| 893906266D | 27C512 (64KB) | 7A / NF 2.3 20v | Late 4-connector — primary target |
-| 893906266B | 27C512 (64KB) | 7A / NF 2.3 20v | Early 2-connector |
-| 4A0906266  | 27C512 (64KB) | AAH 2.8 12v V6  | Audi 100 C4 2.8 12v |
+Auto-detected on open:
 
----
-
-## Map Locations — 7A Late (893906266D)
-
-| Map | Address | Size | Unit |
-|-----|---------|------|------|
-| Ignition | 0x2800 | 16×16 | °BTDC |
-| Fuel | 0x2900 | 16×16 | raw |
-| RPM Scalar | 0x2A00 | 1×16 | RPM |
-| Warmup Enrichment | 0x2B00 | 1×17 | % |
-| IAT Compensation | 0x2B20 | 1×17 | % |
-| ECT Compensation | 0x2B40 | 1×17 | % |
-| Knock Retard | 0x2C00 | 1×16 | ° |
-| Coil Dwell | 0x2C20 | 1×16 | ms |
-| WOT Enrichment | 0x2D00 | 1×17 | % |
-| Idle Speed (ISV) | 0x2D40 | 1×16 | raw |
-| Accel Enrichment | 0x2E00 | 1×16 | raw |
-| Rev Limit | 0x3FF0 | 16-bit word | RPM |
+| Format | Size | Notes |
+|--------|------|-------|
+| `.bin` 32KB | 32 768 bytes | Raw ROM — Teensy SD card |
+| `.bin` 64KB | 65 536 bytes | 27C512 image (two mirrored halves) |
+| `.034`      | 65 536 bytes | MMS bit-scrambled 27C512 — standard tuning file |
 
 ---
 
-## Formula Reference
+## Map Locations — 7A (893906266D / 266B)
 
-| Parameter | Formula |
-|-----------|---------|
-| Ignition | `(210 - byte) / 2.86 = °BTDC` |
-| Rev Limit | `30,000,000 / 16-bit word = RPM` |
-| RPM Scalar | `15,000,000 / 16-bit word = RPM` |
+| Map | Address | Size | Description |
+|-----|---------|------|-------------|
+| Fuel | `0x0000` | 16×16 | Lambda offset — signed, midpoint = 128 |
+| Timing | `0x0100` | 16×16 | Ignition advance — degrees BTDC |
+| RPM axis | `0x05C0` | 16 bytes | Raw × 50 = RPM (250–7000) |
+| MAF axis (fuel) | `0x05D0` | 16 bytes | ADC breakpoints 0–255 |
+| MAF axis (timing) | `0x05E0` | 16 bytes | Identical copy of fuel MAF axis |
+| RPM limit | `0x07D2` | 1 byte | Raw × 25 = RPM |
+| Injection scaler | `0x077E` | 1 byte | Global fuelling scalar |
 
 ---
 
-## Usage
+## Patches — 266D only
 
-### Desktop App
+### MAF Axis Patch
 
-Download from releases and run. No install required.
+Rewrites the 16-point MAF ADC lookup axis at `0x05D0` (fuel) and `0x05E0` (timing)
+to match a different sensor/housing combination. Both copies always updated together.
+Fuel and timing map data is untouched — only the axis interpolation is rescaled.
 
-### Run from Source
+| Profile key | Sensor | Housing | CO pot |
+|-------------|--------|---------|--------|
+| `stock_7a` | Hitachi 054 133 471/A | 50mm stock | ✓ |
+| `aah_v6_housing` | Hitachi 054 133 471 A | 74mm AAH V6 housing | ✓ |
+| `sensor_1_8t_60` ⚠ | Bosch 0280218114 | 60mm 1.8T housing | ✗ |
+| `sensor_1_8t_vr6` ⚠ | Bosch 0280218114 | 69.85mm VR6/TT225 | ✗ |
+
+⚠ = EXPERIMENTAL — derived from King's law bore area calculations. Not verified on engine.  
+Always validate with a wideband O2 sensor before road use.
+
+See [`docs/MAF_SENSOR_WIRING.md`](docs/MAF_SENSOR_WIRING.md) for full wiring and conversion details.
+
+### CO Pot Disable Patch
+
+Disables idle lambda trim (pin 4) and suppresses fault **00521** when no CO pot is present.  
+Confirmed by diffing clean stock 266D and 266B ROMs — three bytes changed:
+
+| Address | Stock | Patched | Effect |
+|---------|-------|---------|--------|
+| `0x0762` | `0x0A` | `0x00` | Low fault threshold → 0V |
+| `0x0763` | `0xEE` | `0xFF` | High fault threshold → 5V |
+| `0x0779` | `0x04` | `0x00` | Trim gain zeroed |
+
+Pin 4 can be left unconnected after this patch. Both patches are independently reversible.
+
+---
+
+## Chip Burning Workflow
+
+1. Open ROM in HachiROM, make edits
+2. **Save 27C512 .bin** (64KB) for EPROM programmers (TL866, T48, etc.)  
+   or **Save .bin** (32KB) for Teensy SD card
+3. Checksum is auto-corrected on save
+4. Program a 27C256 or 27C512 EPROM
+5. Install chip — notch toward ECU connector edge
+
+---
+
+## Run from Source
 
 ```bash
 pip install PyQt5
 python app/main.py
 ```
 
-### As a Python Library
+## As a Python Library
 
 ```python
-from hachirom import load_bin, detect, read_map, compare_roms
+import hachirom as hr
 
-data = load_bin("my_rom.bin")
-result = detect(data)
-print(result.variant.name)    # "7A Late"
+with open("my_rom.bin", "rb") as f:
+    data = f.read()
 
-ign = read_map(data, result.variant.maps[0])
-diffs = compare_roms(data, load_bin("other_rom.bin"), result.variant)
-```
+result = hr.detect(data)
+print(result.variant.version_key)       # "266D"
 
-### Build Standalone Binary
+fuel = hr.read_map(data, result.variant.maps[0])
 
-```bash
-pip install pyinstaller
-python build.py
+# MAF axis patch
+patched = hr.apply_maf_patch(data, "aah_v6_housing")
+
+# CO pot disable
+patched = hr.apply_co_pot_patch(patched, disable=True)
+
+# Detect patch state
+print(hr.detect_maf_patch(data))        # "stock_7a"
+print(hr.detect_co_pot_patch(data))     # "stock"
 ```
 
 ---
 
 ## Relation to audi90-teensy-ecu
 
-HachiROM is the **source of truth** for map definitions, offsets, and formulas.
-The Teensy project imports `hachirom` directly for real-time cell editing via serial.
+HachiROM is the source of truth for map definitions, offsets, and formulas.
+The Teensy project imports `hachirom` directly.
 
 ```
-HachiROM  ──(pip install / submodule)──▶  audi90-teensy-ecu (companion app)
+HachiROM ──(pip install / submodule)──▶ audi90-teensy-ecu
     │
-    └── hachirom/roms.py   ← map definitions, addresses, formulas
-    └── hachirom/maps.py   ← read/write/checksum logic
-    └── hachirom/detect.py ← variant detection
+    ├── hachirom/roms.py    ← map definitions, MAF profiles, CO pot addresses
+    ├── hachirom/maps.py    ← read/write/patch/checksum logic
+    └── hachirom/detect.py  ← variant detection
 ```
 
 ---
 
-## Reference ROMs
+## Contributing
 
-Stock dumps go in [`roms/`](roms/). See [`roms/README.md`](roms/README.md).
+Stock ROM dumps (`.bin` or `.034`) for 266D, 266B, and AAH variants are always welcome.
+More dumps improve detection confidence and enable further ROM analysis.
+Please open a GitHub issue with your CRC32 and ECU part number.
 
----
-
-## References
-
-- [034 Motorsport RIP Chip Maps](https://www.034motorsport.com/downloads) — 7A ECU definitions and stock maps
-- [audi90-teensy-ecu](https://github.com/dspl1236/audi90-teensy-ecu) — Teensy EPROM emulator project
-- [DigifantTool](https://github.com/dspl1236/DigifantTool) — Related Digifant-1 ECU editor (G60/G40)
+https://github.com/dspl1236/HachiROM

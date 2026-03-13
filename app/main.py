@@ -1810,12 +1810,22 @@ class MainWindow(QMainWindow):
             "QPushButton:hover { background:#002a3d; }"
             "QPushButton:disabled { background:#1e1e1e; color:#444; border-color:#333; }")
 
+        self.btn_compare = QPushButton("⊕ Compare…")
+        self.btn_compare.setToolTip("Open the Compare tab and load a second ROM to diff against")
+        self.btn_compare.clicked.connect(self._open_compare_tab)
+        self.btn_compare.setStyleSheet(
+            "QPushButton { background:#1a1a2a; color:#aaaaff; border:1px solid #333366; "
+            "padding:5px 14px; border-radius:3px; }"
+            "QPushButton:hover { background:#25253d; }"
+            "QPushButton:disabled { background:#1e1e1e; color:#444; border-color:#333; }")
+
         top.addWidget(self.lbl_file, 1)
         top.addWidget(btn_open)
         top.addWidget(self.btn_save)
         top.addWidget(self.btn_save512)
         top.addWidget(self.btn_maf)
         top.addWidget(self.btn_copot)
+        top.addWidget(self.btn_compare)
         root.addLayout(top)
 
         splitter = QSplitter(Qt.Horizontal)
@@ -1844,12 +1854,14 @@ class MainWindow(QMainWindow):
         welcome = QLabel(
             f"HachiROM  v{APP_VERSION}\n\n"
             "Open a .bin or .034 ROM file to begin.\n\n"
-            "Supported ECUs:\n"
-            "  893906266D — 7A Late  (Audi 90 / Coupe Quattro 2.3 20v, 4-connector)\n"
-            "  893906266B — 7A Early (Audi 90 / Coupe Quattro 2.3 20v, 2-connector)\n"
-            "  4A0906266  — AAH 12v  (Audi 100 C4 2.8 12v)\n\n"
+            "Supported ECUs — Hitachi MMS family\n"
+            "  MMS05C  893906266D — 7A Late  (Audi 80/90/Coupe Quattro 2.3 20v, 1991–1995, 4-pin MAF)\n"
+            "  MMS05C  893906266B — 7A Early (Audi 80/90/Coupe Quattro 2.3 20v, pre-1991, 2-pin MAF)\n"
+            "  MMS100  4A0906266  — AAH 12v  (Audi 100 C4 / S4 C4 2.8 V6 12v, MAP-sensor ECU)\n\n"
+            "266D / 266B extras:  MAF axis patch  ·  CO pot disable patch\n\n"
             "Double-click any map cell to edit.\n"
-            "Changed cells get a green border.  Save when ready."
+            "Changed cells get a green border.  Save when ready.\n\n"
+            "Tip: use Compare tab to diff stock vs tuned before burning."
         )
         welcome.setAlignment(Qt.AlignCenter)
         welcome.setStyleSheet("color:#555; font-size:13px;")
@@ -2158,6 +2170,16 @@ class MainWindow(QMainWindow):
         QMessageBox.information(self, "CO Pot Patch Applied", msg)
 
 
+
+    def _open_compare_tab(self):
+        """Switch to the Compare tab and focus it."""
+        if self._compare_tab_idx >= 0:
+            self.tabs.setCurrentIndex(self._compare_tab_idx)
+        else:
+            for i in range(self.tabs.count()):
+                if "Compare" in self.tabs.tabText(i):
+                    self.tabs.setCurrentIndex(i)
+                    break
 
     def _about(self):
         QMessageBox.about(self, f"HachiROM v{APP_VERSION}",
