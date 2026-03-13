@@ -215,6 +215,7 @@ class MapTab(QWidget):
         self._baseline = [[_read(r, c) for c in range(cols)] for r in range(rows)]
         # Local copy — edits land here
         self._local    = [[_read(r, c) for c in range(cols)] for r in range(rows)]
+        self._updating = False   # guard against re-entrant itemChanged
 
         self._build_ui()
 
@@ -285,6 +286,7 @@ class MapTab(QWidget):
     # ── Table population ──────────────────────────────────────────────────────
 
     def _populate_table(self):
+        self._updating = True
         self.table.blockSignals(True)
         rows, cols = self.map_def.rows, self.map_def.cols
         all_raw = [self._local[r][c] for r in range(rows) for c in range(cols)]
@@ -304,10 +306,13 @@ class MapTab(QWidget):
                     item.setToolTip(f"raw={raw}  →  {signed:+d}° BTDC")
                 self.table.setItem(r, c, item)
         self.table.blockSignals(False)
+        self._updating = False
 
     # ── Cell edit ─────────────────────────────────────────────────────────────
 
     def _on_cell_changed(self, item: QTableWidgetItem):
+        if self._updating:
+            return
         r, c = item.row(), item.column()
         raw  = self._encode(item.text())
 
@@ -322,6 +327,7 @@ class MapTab(QWidget):
         changed = raw != self._baseline[r][c]
 
         # Recolour and mark changed border
+        self._updating = True
         self.table.blockSignals(True)
         all_raw = [self._local[rr][cc]
                    for rr in range(self.map_def.rows)
@@ -333,6 +339,7 @@ class MapTab(QWidget):
             signed = raw if raw < 128 else raw - 256
             item.setToolTip(f"raw={raw}  →  {signed:+d}° BTDC")
         self.table.blockSignals(False)
+        self._updating = False
 
     # ── Flush ─────────────────────────────────────────────────────────────────
 
