@@ -145,7 +145,7 @@ class SaveConfirmDialog(QDialog):
 
         size_str = ("65,536 bytes (64 KB)" if mode == "27c512"
                     else f"{len(data):,} bytes (32 KB)")
-        note_str = ("Lower 32KB: 0xFF (erased pad)  |  Upper 32KB: ROM"
+        note_str = ("ROM mirrored into both 32KB halves — burn in 27C512 mode"
                     if mode == "27c512"
                     else "Native 32KB ROM — Teensy SD card / emulator")
 
@@ -819,10 +819,16 @@ class MainWindow(QMainWindow):
         path, rom32 = self._pre_save("27c512")
         if path is None: return
         try:
-            image = bytes([0xFF] * 32768) + bytes(rom32)
+            # Mirror ROM into both halves.
+            # The Hitachi ECU reads from A15=1 (upper 32KB), so either half works
+            # electrically, but mirroring is safer:
+            #   - Programmer verify passes on both halves
+            #   - If accidentally burned in 27C256 mode (32KB only), chip still works
+            #   - Matches what OEM 27C256 chips contain (pin-adapted to 27C512 socket)
+            image = bytes(rom32) + bytes(rom32)
             hr.save_bin(image, path)
             self.statusBar().showMessage(
-                f"Saved 27C512 → {Path(path).name}  (64 KB)")
+                f"Saved 27C512 → {Path(path).name}  (64 KB, mirrored)")
         except Exception as e:
             QMessageBox.critical(self, "Save Error", str(e))
 
