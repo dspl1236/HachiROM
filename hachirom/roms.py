@@ -64,33 +64,69 @@ LOAD_AXIS_AAH   = [12.6,18.8,23.5,28.2,32.9,38.4,43.9,50.2,56.5,62.8,69.0,75.3,8
 # Airflow reference points (g/s) for each of the 16 axis breakpoints:
 #   [0, 5, 15, 25, 45, 60, 80, 100, 140, 165, 190, 220, 280, 295, 300, 300]
 #
-# CO pot note:
-#   Stock 7A MAF (Bosch 0280213016) is 5-wire.  Wire 4 is a CO trim
-#   potentiometer — a separate ECU input that applies a small lambda offset
-#   for mixture fine-tuning without opening the ECU.
-#   The VR6/TT225 sensor (Bosch 0280218042/0280218116) is 4-wire — no CO pot.
-#   Hardware fix: bridge the CO pot ECU pin to 2.5 V via a 10 kΩ / 10 kΩ
-#   voltage divider from the ECU 5 V reference.  This holds the trim at the
-#   neutral mid-point.  Do NOT leave pin 4 floating — the ECU ADC will read
-#   noise and may trim the mixture unpredictably.
+# CO pot — detailed wiring (source: 20v-sauger-tuning.de)
+#   The stock 7A MAF (054 133 471 / A) is 4-pin:
+#     Pin 1: MAF signal (0-5V to ECU)
+#     Pin 2: Ground
+#     Pin 3: +12V supply
+#     Pin 4: CO pot signal
+#
+#   The ECU sends ~9V on pin 4.  The original CO pot (integrated into the
+#   sensor head) divides this to 1.0–7.5V.  The ECU reads this voltage at
+#   idle to trim the lambda target — it is only active at idle.
+#   Fault code if missing: 00521 "CO-Poti Unterbrechung oder Kurzschluss"
+#   Symptoms: poor idle, stumble off idle, fault code stored.
+#   Normal driving is unaffected — CO pot is idle-only.
+#
+#   For 3-wire replacement sensors (no CO pot):
+#     External pot wiring (from 20v-sauger-tuning.de page 2):
+#       1 kΩ resistor from pot pin 1 → GND
+#       Pot wiper (pin 2) → original pin 4 wire (to ECU)
+#       20 kΩ 10-turn precision pot (Reichelt 534-20K or similar)
+#     This covers the 1–7.5V range, no fault code, adjustable like original.
+#
+#   AAH V6 housing + 7A sensor transplant (plug-and-play option):
+#     Move the 7A sensor unit (054 133 471 A) into the AAH housing (078 133 471).
+#     This retains the 4-pin connector and CO pot — NO wiring changes at all.
+#     Requires ROM patch for correct fuelling (see aah_v6_housing profile).
+#     IMPORTANT housing compatibility:
+#       Use 078 133 471 (no suffix) — mounting holes match 7A sensor unit.
+#       078 133 471 A / AX have mirrored holes and different sensor depth — INCOMPATIBLE.
+#       054 133 471 A  (with Index A) fits directly; without Index A needs shim washers.
 # ---------------------------------------------------------------------------
 
 MAF_AXIS_ADDR_FUEL   = 0x05D0   # fuel map MAF axis location in ROM
 MAF_AXIS_ADDR_TIMING = 0x05E0   # timing map MAF axis location (identical copy)
 MAF_AXIS_LEN         = 16       # 16 breakpoints
 
-# Stock axis — Bosch 0280213016 in original 60mm (2.36") housing
+# Stock axis — Bosch 0280213016 in original 50mm housing (054 133 471 / A)
 # Confirmed from physical ROM read 893906266D_MMS05C_physical.bin
+# Housing bore: 50mm, bypass: 8mm, total flow area: 2013.76mm²
+# Sensor capacity: 480 kg/h
 MAF_AXIS_STOCK_7A = [5, 10, 20, 30, 50, 62, 75, 87, 116, 131, 145, 160, 225, 243, 255, 255]
 
+# AAH V6 housing + 7A sensor transplant
+# 7A sensor unit (054 133 471 A) swapped into AAH 2.8L V6 housing (078 133 471 no-suffix).
+# Source: 20v-sauger-tuning.de, measured housing dimensions:
+#   AAH housing bore: 74mm, bypass: 10mm, rib: 19×74mm, total flow area: 2972.53mm²
+#   Velocity ratio at same airflow: 2013.76 / 2972.53 = 0.6775
+#   King's law voltage scaling: sqrt(0.6775) = 0.8231
+# Derived from stock axis by applying King's law correction for reduced bypass velocity.
+# PLUG-AND-PLAY: retains 4-pin connector and CO pot — no wiring changes needed.
+# REQUIRES this ROM patch — without it the ECU under-reads airflow and runs lean.
+# DO NOT remove the centre rib from the AAH housing — destroys bypass ratio, will run lean.
+# Housing capacity: 400 kg/h (less than stock 480 kg/h — sufficient for NA/mild boost).
+MAF_AXIS_AAH_V6     = [4, 8, 16, 25, 41, 51, 62, 72, 95, 108, 119, 132, 185, 200, 255, 255]
+
 # VR6 / TT 225 axis — Bosch 0280218042 / 0280218116 in 69.85mm (2.75") housing
-# Derived from published sensor transfer function data; same airflow breakpoints
-# as stock but lower ADC counts because the larger bore reduces air velocity.
+# 3-wire sensor — no CO pot.  Requires external pot (1kΩ + 20kΩ) or voltage divider on pin 4.
+# Derived from published sensor transfer function data.
 # Suitable for K04 / hybrid turbo setups, approx. 250-300 hp.
 # Housing: MK4 VR6 / Audi TT 225 — 2.75" ID / 3.0" OD
 MAF_AXIS_VR6_TT225  = [4, 8, 16, 27, 46, 56, 69, 81, 107, 122, 137, 152, 201, 219, 242, 242]
 
 # B6 S4 4.2 V8 axis — Bosch 0280218076 in 82mm (3.23") housing
+# 3-wire sensor — no CO pot.  Requires external pot or voltage divider on pin 4.
 # For large turbo / high-flow applications, approx. 300+ hp.
 # Housing: B6 S4 4.2L — 3.2" ID / 3.6" OD.  Requires adapter to 60mm MAF pipe.
 # NOTE: axis values are estimates derived from scaling the VR6 transfer function
@@ -99,26 +135,37 @@ MAF_AXIS_S4_82MM    = [3, 6, 12, 21, 37, 46, 56, 66, 88, 101, 113, 126, 168, 183
 
 # Human-readable sensor profiles keyed by profile name
 MAF_PROFILES: dict = {
-    "stock_7a":   {
-        "label":   "Stock 7A  (60mm / 2.36\")",
+    "stock_7a":     {
+        "label":   "Stock 7A  (50mm)",
         "axis":    MAF_AXIS_STOCK_7A,
-        "housing": "Original Bosch 0280213016 — stock 60mm housing",
+        "housing": "Original 054 133 471 / A — 50mm bore, 480 kg/h sensor",
         "hp_note": "~170 hp limit",
         "co_pot":  True,
+        "plug_play": True,
     },
-    "vr6_tt225":  {
+    "aah_v6_housing": {
+        "label":   "AAH V6 housing + 7A sensor  (74mm)",
+        "axis":    MAF_AXIS_AAH_V6,
+        "housing": "078 133 471 (no suffix) housing + 054 133 471 A sensor unit",
+        "hp_note": "NA / mild boost — plug-and-play wiring, ROM patch required",
+        "co_pot":  True,
+        "plug_play": True,
+    },
+    "vr6_tt225":    {
         "label":   "VR6 / TT225  (69.85mm / 2.75\")",
         "axis":    MAF_AXIS_VR6_TT225,
         "housing": "MK4 VR6 / Audi TT 225 — Bosch 0280218042 / 0280218116",
-        "hp_note": "~250-300 hp — recommended for K04 / hybrid turbo",
+        "hp_note": "~250-300 hp — K04 / hybrid turbo",
         "co_pot":  False,
+        "plug_play": False,
     },
-    "s4_82mm":    {
+    "s4_82mm":      {
         "label":   "B6 S4 4.2  (82mm / 3.23\")",
         "axis":    MAF_AXIS_S4_82MM,
         "housing": "B6/B7 S4 4.2L V8 — Bosch 0280218076 — needs 60mm adapter",
         "hp_note": "300+ hp — large turbo builds",
         "co_pot":  False,
+        "plug_play": False,
     },
 }
 

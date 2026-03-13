@@ -280,34 +280,62 @@ class MafPatchDialog(QDialog):
                 textFormat=Qt.RichText)
             detail.setWordWrap(True)
 
-            # CO pot indicator
+            # Badges: plug-and-play indicator + CO pot status
+            badges = QHBoxLayout()
+            badges.setSpacing(4)
+            badges.setContentsMargins(0, 0, 0, 0)
+
+            if p.get("plug_play"):
+                pp_lbl = QLabel("✔ plug-and-play wiring")
+                pp_lbl.setStyleSheet(
+                    "color:#2dff6e; font-size:10px; background:#0a1a0a; "
+                    "border:1px solid #1a5c1a; padding:1px 4px; border-radius:2px;")
+                pp_lbl.setToolTip("No wiring changes needed — original 4-pin connector fits directly.")
+                badges.addWidget(pp_lbl)
+
             if p["co_pot"]:
-                co_lbl = QLabel("5-wire (CO pot)")
+                co_lbl = QLabel("CO pot retained")
                 co_lbl.setStyleSheet(
                     "color:#888; font-size:10px; background:#222; "
                     "border:1px solid #444; padding:1px 4px; border-radius:2px;")
+                co_lbl.setToolTip(
+                    "This sensor retains the CO trim pot on pin 4.\n"
+                    "Idle mixture adjustment works exactly as standard.")
             else:
                 co_lbl = QLabel("4-wire  ⚠ bridge pin 4")
                 co_lbl.setStyleSheet(
                     "color:#ff9900; font-size:10px; background:#2a1a00; "
                     "border:1px solid #664400; padding:1px 4px; border-radius:2px;")
-            co_lbl.setToolTip(
-                "Stock 7A MAF is 5-wire — wire 4 is the CO trim pot (lambda offset).\n"
-                "Replacement sensors are 4-wire — no CO pot wire.\n"
-                "Hardware fix: connect a 10kΩ/10kΩ voltage divider between\n"
-                "ECU 5V ref and GND; wire midpoint (2.5V) to ECU pin 4.\n"
-                "Do NOT leave pin 4 floating — the ECU will trim the mixture.")
+                co_lbl.setToolTip(
+                    "3-wire sensor — no CO pot (pin 4).\n"
+                    "Fault code 00521 will be stored if pin 4 is left open.\n"
+                    "Hardware fix: 1kΩ resistor from pot pin 1 to GND,\n"
+                    "wiper (pin 2) to ECU pin 4, 20kΩ 10-turn pot.\n"
+                    "Covers 1.0–7.5V range — adjustable like original.\n"
+                    "(Source: 20v-sauger-tuning.de — Reichelt 534-20K pot)")
+            badges.addWidget(co_lbl)
+            badges.addStretch()
+
+            badge_widget = QWidget()
+            badge_widget.setLayout(badges)
+
+            detail_col = QVBoxLayout()
+            detail_col.setSpacing(2)
+            detail_col.setContentsMargins(0, 0, 0, 0)
+            detail_col.addWidget(detail)
+            detail_col.addWidget(badge_widget)
+            detail_container = QWidget()
+            detail_container.setLayout(detail_col)
 
             rl.addWidget(rb)
-            rl.addWidget(detail, 1)
-            rl.addWidget(co_lbl)
+            rl.addWidget(detail_container, 1)
             layout.addWidget(row)
 
         # If none of the known profiles is selected (unknown/inconsistent), default to stock
         if not any(rb.isChecked() for rb in self._buttons.values()):
             self._buttons["stock_7a"].setChecked(True)
 
-        # ── CO pot warning box ───────────────────────────────────────────────
+        # ── CO pot warning box (shown for 3-wire sensors only) ───────────────
         co_box = QFrame()
         co_box.setStyleSheet(
             "background:#1a1200; border:1px solid #664400; "
@@ -315,17 +343,19 @@ class MafPatchDialog(QDialog):
         co_lay = QVBoxLayout(co_box)
         co_lay.setSpacing(2)
         co_lay.addWidget(QLabel(
-            "<b style='color:#ff9900'>⚠  CO pot / wire 4 — hardware action required</b>",
+            "<b style='color:#ff9900'>⚠  CO pot (pin 4) — hardware action required</b>",
             textFormat=Qt.RichText))
         co_lay.addWidget(QLabel(
             "<span style='color:#aaa; font-size:11px;'>"
-            "The stock 7A MAF has a 5th wire (CO trim pot) that feeds a separate ECU ADC "
-            "input.  VR6/TT225 and S4 sensors are 4-wire — this pin will be open.<br>"
-            "<b>Fix:</b> solder a 10 kΩ resistor from ECU 5 V ref to pin 4, and another "
-            "10 kΩ from pin 4 to sensor GND.  This holds the trim at neutral (2.5 V)."
+            "This sensor has no CO pot.  ECU pin 4 must not be left floating or "
+            "fault code 00521 will be stored and idle will be affected.<br>"
+            "<b>Fix (from 20v-sauger-tuning.de):</b> wire a 1 kΩ resistor from "
+            "pot pin 1 to GND, connect the wiper (pin 2) to ECU pin 4.  "
+            "Use a 20 kΩ 10-turn pot (Reichelt 534-20K) for fine adjustment "
+            "over the 1.0–7.5 V range — identical behaviour to the original CO pot."
             "</span>",
             textFormat=Qt.RichText))
-        co_box.setVisible(False)   # shown/hidden based on selection
+        co_box.setVisible(False)
         layout.addWidget(co_box)
         self._co_box = co_box
 
