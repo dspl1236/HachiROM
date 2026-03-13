@@ -209,10 +209,9 @@ class MapTab(QWidget):
     Green border on cells where _local != _baseline via ChangedCellDelegate.
     """
 
-    def __init__(self, map_def, rom_data: bytearray, parent=None):
+    def __init__(self, map_def, rom_snapshot: bytes, parent=None):
         super().__init__(parent)
         self.map_def  = map_def
-        self.rom_data = rom_data
         self._is_timing = any(k in map_def.name.lower()
                               for k in ("timing", "knock"))
 
@@ -220,8 +219,10 @@ class MapTab(QWidget):
 
         def _read(r, c):
             off = addr + r * cols + c
-            return rom_data[off] if off < len(rom_data) else 0
+            return rom_snapshot[off] if off < len(rom_snapshot) else 0
 
+        # Both grids are independent in-memory copies — nothing is written back
+        # to any shared buffer until the user explicitly saves.
         self._baseline = [[_read(r, c) for c in range(cols)] for r in range(rows)]
         self._local    = [[_read(r, c) for c in range(cols)] for r in range(rows)]
 
@@ -344,14 +345,16 @@ class MapTab(QWidget):
                     s = v if v < 128 else v - 256
                     item.setToolTip(f"raw={v}  \u2192  {s:+d}\u00b0 BTDC")
 
-    def flush_to_rom(self):
-        """Write _local into the shared rom_data bytearray."""
+    def build_patch(self) -> dict:
+        """Return {rom_offset: byte} for every cell that differs from baseline.
+        Nothing is written anywhere — caller assembles the full ROM on save."""
         addr, rows, cols = self.map_def.address, self.map_def.rows, self.map_def.cols
+        patch = {}
         for r in range(rows):
             for c in range(cols):
-                off = addr + r * cols + c
-                if off < len(self.rom_data):
-                    self.rom_data[off] = self._local[r][c]
+                if self._local[r][c] != self._baseline[r][c]:
+                    patch[addr + r * cols + c] = self._local[r][c]
+        return patch
 
     def changed_count(self) -> int:
         rows, cols = self.map_def.rows, self.map_def.cols
@@ -929,10 +932,9 @@ class MainWindow(QMainWindow):
         super().__init__()
         self.setWindowTitle(f"HachiROM  v{APP_VERSION}")
         self.resize(1280, 820)
-        self.current_data:    bytearray = bytearray()
         self.current_path:    str = ""
         self.current_variant  = None
-        self._original_data:  bytes = b""   # snapshot at open time — never mutated
+        self._rom_snapshot:   bytes = b""   # original ROM bytes at open time — never mutated
         self._map_tabs:       list[MapTab] = []
         self._compare_tab_idx: int = -1
         self._build_menu()
@@ -1075,15 +1077,14 @@ class MainWindow(QMainWindow):
                     f"The file was adjusted before loading:\n\n{msg}\n\n"
                     f"Original size: {raw_size:,} bytes  →  working with 32KB ROM.")
 
-            self._original_data = bytes(rom32)
-            self.current_data   = bytearray(rom32)
-            self.current_path   = path
+            self._rom_snapshot = bytes(rom32)
+            self.current_path  = path
             self._load_rom(path)
         except Exception as e:
             QMessageBox.critical(self, "Open Error", str(e))
 
     def _load_rom(self, path: str):
-        data   = bytes(self.current_data)
+        data   = self._rom_snapshot
         result = hr.detect(data)
         self.current_variant = result.variant
 
@@ -1110,37 +1111,27 @@ class MainWindow(QMainWindow):
                             and not m.name.lower().startswith("rpm")
                             and not m.name.lower().startswith("load"))]
             for m in editable:
-                tab = MapTab(m, self.current_data)
+                tab = MapTab(m, self._rom_snapshot)
                 self._map_tabs.append(tab)
                 self.tabs.addTab(tab, m.name)
         else:
-            hex_tab = HexViewTab(bytes(self.current_data))
+            hex_tab = HexViewTab(self._rom_snapshot)
             self.tabs.addTab(hex_tab, "Hex Dump")
 
         self.compare_tab = CompareTab()
         self._compare_tab_idx = self.tabs.addTab(self.compare_tab, "⊕ Compare")
 
-        self.info_panel.update_rom(data)
+        self.info_panel.update_rom(self._rom_snapshot)
         self.statusBar().showMessage(
             f"Loaded {Path(path).name}  ·  {variant_name}  ·  "
             f"confidence: {result.confidence}")
 
     # ── Save helpers ──────────────────────────────────────────────────────────
 
-    def _collect_edits(self):
-        for tab in self._map_tabs:
-            tab.flush_to_rom()
-
-    def _corrected_32k(self) -> bytearray:
-        self._collect_edits()
-        raw = bytes(self.current_data[:32768])
-        if self.current_variant:
-            return hr.apply_checksum(raw, self.current_variant)
-        return bytearray(raw)
 
     def save_rom(self):
-        """Save 32KB .bin — checksum corrected. Shows confirm dialog."""
-        if not self.current_data:
+        """Save 32KB .bin — assembles from in-memory edits, corrects checksum."""
+        if not self._rom_snapshot:
             QMessageBox.warning(self, "HachiROM", "No ROM loaded.")
             return
 
@@ -1153,28 +1144,21 @@ class MainWindow(QMainWindow):
         if not path:
             return
 
-        self._collect_edits()
-
-        # Checksum confirm dialog — only for 32KB saves
-        if self.current_variant:
-            dlg = SaveConfirmDialog(
-                bytes(self.current_data[:32768]),
-                self.current_variant, path, parent=self)
-            if dlg.exec_() != QDialog.Accepted:
-                return
-
         try:
-            rom32 = self._corrected_32k()
+            rom32 = self._build_rom()
+            if self.current_variant:
+                dlg = SaveConfirmDialog(
+                    bytes(rom32), self.current_variant, path, parent=self)
+                if dlg.exec_() != QDialog.Accepted:
+                    return
             hr.save_bin(bytes(rom32), path)
             self.statusBar().showMessage(f"Saved → {Path(path).name}")
         except Exception as e:
             QMessageBox.critical(self, "Save Error", str(e))
 
     def save_27c512(self):
-        """Save 64KB 27C512 image — ROM mirrored, NO checksum correction.
-        The checksum is already correct in the 32KB data; the 27C512 format
-        is just a carrier for EPROM programmers and does not need modification."""
-        if not self.current_data:
+        """Save 64KB 27C512 image — edits applied, checksum corrected, mirrored."""
+        if not self._rom_snapshot:
             QMessageBox.warning(self, "HachiROM", "No ROM loaded.")
             return
 
@@ -1187,19 +1171,14 @@ class MainWindow(QMainWindow):
         if not path:
             return
 
-        self._collect_edits()
-
         try:
-            # Always correct checksum before mirroring — the image should
-            # be ready to burn without any extra steps.
-            rom32 = bytes(self._corrected_32k())
+            rom32 = bytes(self._build_rom())
             image = rom32 + rom32
             hr.save_bin(image, path)
             self.statusBar().showMessage(
-                f"Saved 27C512 → {Path(path).name}  (64 KB, mirrored, checksum corrected)")
+                f"Saved 27C512 \u2192 {Path(path).name}  (64 KB, mirrored, checksum corrected)")
         except Exception as e:
             QMessageBox.critical(self, "Save Error", str(e))
-
     # ── Misc ─────────────────────────────────────────────────────────────────
 
     def _about(self):
