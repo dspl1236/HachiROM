@@ -11,9 +11,9 @@ from PyQt5.QtWidgets import (
     QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QFileDialog,
     QTableWidget, QTableWidgetItem, QStatusBar, QMessageBox,
     QTextEdit, QSplitter, QAction, QHeaderView, QDialog,
-    QDialogButtonBox, QFrame
+    QDialogButtonBox, QFrame, QLineEdit, QScrollArea
 )
-from PyQt5.QtCore import Qt
+from PyQt5.QtCore import Qt, pyqtSignal
 from PyQt5.QtGui import QColor, QFont, QBrush
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
@@ -366,6 +366,198 @@ class MapTab(QWidget):
             1 for r in range(rows) for c in range(cols)
             if self._local[r][c] != self._baseline[r][c]
         )
+
+
+# ---------------------------------------------------------------------------
+# Overview tab  — single-value edits surfaced as labelled input fields
+# ---------------------------------------------------------------------------
+
+class OverviewField(QWidget):
+    """One labelled row: name | current value | RPM input | Apply button | status."""
+
+    changed = pyqtSignal()   # emitted when value is written to _local
+
+    def __init__(self, map_def, rom_snapshot: bytes, parent=None):
+        super().__init__(parent)
+        self.map_def      = map_def
+        self._snapshot    = rom_snapshot
+        self._map_tab     = None   # lazily created MapTab for patch access
+
+        addr = map_def.address
+        raw  = rom_snapshot[addr] if addr < len(rom_snapshot) else 0
+        self._raw = raw
+
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(0, 4, 0, 4)
+        layout.setSpacing(12)
+
+        # Name label
+        lbl_name = QLabel(map_def.name)
+        lbl_name.setFixedWidth(160)
+        lbl_name.setStyleSheet("color:#aaa; font-size:12px;")
+        layout.addWidget(lbl_name)
+
+        # Current decoded value (read-only display)
+        decoded = map_def.decode(raw) if map_def.decode else raw
+        cur_txt = (f"{decoded:.0f}" if isinstance(decoded, float) and decoded == int(decoded)
+                   else f"{decoded:.3f}" if isinstance(decoded, float) else str(decoded))
+        self.lbl_current = QLabel(f"{cur_txt} {map_def.unit or ''}")
+        self.lbl_current.setFixedWidth(120)
+        self.lbl_current.setStyleSheet("color:#888; font-size:12px;")
+        layout.addWidget(self.lbl_current)
+
+        # Editable input
+        self.edit = QLineEdit(cur_txt)
+        self.edit.setFixedWidth(110)
+        self.edit.setStyleSheet(
+            "background:#2a2a2a; color:#e8e8e8; border:1px solid #444; "
+            "border-radius:3px; padding:3px 6px; font-size:12px;")
+        self.edit.returnPressed.connect(self._apply)
+        layout.addWidget(self.edit)
+
+        unit_lbl = QLabel(map_def.unit or "")
+        unit_lbl.setFixedWidth(40)
+        unit_lbl.setStyleSheet("color:#666; font-size:11px;")
+        layout.addWidget(unit_lbl)
+
+        # Apply button
+        self.btn = QPushButton("Apply")
+        self.btn.setFixedWidth(70)
+        self.btn.setStyleSheet(
+            "QPushButton { background:#1a6b3a; color:#fff; border:none; "
+            "border-radius:3px; padding:4px 10px; font-size:12px; }"
+            "QPushButton:hover { background:#22994f; }"
+            "QPushButton:pressed { background:#155c30; }")
+        self.btn.clicked.connect(self._apply)
+        layout.addWidget(self.btn)
+
+        # Status label
+        self.lbl_status = QLabel("")
+        self.lbl_status.setStyleSheet("font-size:11px; color:#555;")
+        layout.addWidget(self.lbl_status)
+        layout.addStretch()
+
+    def _ensure_tab(self):
+        if self._map_tab is None:
+            self._map_tab = MapTab(self.map_def, self._snapshot)
+
+    def _apply(self):
+        self._ensure_tab()
+        text = self.edit.text().strip()
+        raw = self._map_tab._encode(text)
+        if raw is None:
+            self.lbl_status.setText("✗ invalid value")
+            self.lbl_status.setStyleSheet("font-size:11px; color:#ff6666;")
+            return
+        self._map_tab._local[0][0] = raw
+        self._raw = raw
+        decoded = self.map_def.decode(raw) if self.map_def.decode else raw
+        disp = (f"{decoded:.0f}" if isinstance(decoded, float) and decoded == int(decoded)
+                else f"{decoded:.3f}" if isinstance(decoded, float) else str(decoded))
+        self.edit.setText(disp)
+        self.lbl_current.setText(f"{disp} {self.map_def.unit or ''}")
+        self.lbl_status.setText("✓ applied")
+        self.lbl_status.setStyleSheet("font-size:11px; color:#2dff6e;")
+        self.changed.emit()
+
+    def build_patch(self) -> dict:
+        if self._map_tab is None:
+            return {}
+        return self._map_tab.build_patch()
+
+    def changed_count(self) -> int:
+        if self._map_tab is None:
+            return 0
+        return self._map_tab.changed_count()
+
+
+class OverviewTab(QWidget):
+    """First tab — surfaces RPM Limit, Injection Scaler, CL Disable RPM
+    as simple labelled input fields. Mirrors the DigiTool overview UX."""
+
+    # Names of maps to surface (in order). Only shown if present in the variant.
+    FIELD_NAMES = ["RPM Limit", "Injection Scaler", "CL Disable RPM", "CL RPM Limit"]
+
+    def __init__(self, variant, rom_snapshot: bytes, parent=None):
+        super().__init__(parent)
+        self._fields: list[OverviewField] = []
+        self._build_ui(variant, rom_snapshot)
+
+    def _build_ui(self, variant, rom_snapshot: bytes):
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(20, 20, 20, 20)
+        outer.setSpacing(0)
+
+        # ── REV LIMIT section ────────────────────────────────────────────────
+        rpm_maps = [m for m in variant.maps if m.name == "RPM Limit"]
+        if rpm_maps:
+            outer.addWidget(self._section_header(
+                "REV LIMIT",
+                "The classic first EPROM edit. Change the value, "
+                "click Apply, then Save 27C512 and burn the chip."))
+            field = OverviewField(rpm_maps[0], rom_snapshot)
+            self._fields.append(field)
+            outer.addWidget(field)
+            outer.addSpacing(8)
+
+        # ── ECU PARAMETERS section ───────────────────────────────────────────
+        param_names = ["Injection Scaler", "CL Disable RPM", "CL RPM Limit"]
+        param_maps  = [m for m in variant.maps if m.name in param_names]
+        # preserve order
+        param_maps.sort(key=lambda m: param_names.index(m.name)
+                        if m.name in param_names else 99)
+        if param_maps:
+            outer.addSpacing(16)
+            outer.addWidget(self._section_header(
+                "ECU PARAMETERS",
+                "Single-byte scalars. Edit carefully — these affect "
+                "the whole fuel system."))
+            for m in param_maps:
+                field = OverviewField(m, rom_snapshot)
+                self._fields.append(field)
+                outer.addWidget(field)
+                outer.addSpacing(4)
+
+        outer.addStretch()
+
+        # ── Workflow hint ────────────────────────────────────────────────────
+        hint = QLabel(
+            "Workflow:  Open ROM  →  edit values above  →  "
+            "Save 27C512 .bin  →  burn with TL866 / T48  →  install  →  test")
+        hint.setWordWrap(True)
+        hint.setStyleSheet(
+            "color:#555; font-size:11px; padding:12px 0 0 0;")
+        outer.addWidget(hint)
+
+    @staticmethod
+    def _section_header(title: str, subtitle: str) -> QWidget:
+        w = QWidget()
+        v = QVBoxLayout(w)
+        v.setContentsMargins(0, 0, 0, 6)
+        v.setSpacing(2)
+        t = QLabel(title)
+        t.setStyleSheet(
+            "color:#2dff6e; font-size:10px; font-weight:bold; letter-spacing:2px;")
+        s = QLabel(subtitle)
+        s.setWordWrap(True)
+        s.setStyleSheet("color:#555; font-size:11px;")
+        sep = QFrame()
+        sep.setFrameShape(QFrame.HLine)
+        sep.setStyleSheet("color:#2a2a2a;")
+        v.addWidget(t)
+        v.addWidget(s)
+        v.addWidget(sep)
+        return w
+
+    def build_patches(self) -> dict:
+        """Merged patch dict from all fields."""
+        patch = {}
+        for f in self._fields:
+            patch.update(f.build_patch())
+        return patch
+
+    def changed_count(self) -> int:
+        return sum(f.changed_count() for f in self._fields)
 
 
 # ---------------------------------------------------------------------------
@@ -962,6 +1154,7 @@ class MainWindow(QMainWindow):
         self.current_variant  = None
         self._rom_snapshot:   bytes = b""   # original ROM bytes at open time — never mutated
         self._map_tabs:       list[MapTab] = []
+        self._overview_tab:  OverviewTab | None = None
         self._compare_tab_idx: int = -1
         self._build_menu()
         self._build_ui()
@@ -1130,8 +1323,13 @@ class MainWindow(QMainWindow):
         while self.tabs.count():
             self.tabs.removeTab(0)
         self._map_tabs = []
+        self._overview_tab = None
 
         if result.variant:
+            # Overview tab — always first
+            self._overview_tab = OverviewTab(result.variant, self._rom_snapshot)
+            self.tabs.insertTab(0, self._overview_tab, "Overview")
+
             editable = [m for m in result.variant.maps
                         if m.is_2d or (m.cols > 1
                             and not m.name.lower().startswith("rpm")
@@ -1141,6 +1339,7 @@ class MainWindow(QMainWindow):
                 self._map_tabs.append(tab)
                 self.tabs.addTab(tab, m.name)
         else:
+            self._overview_tab = None
             hex_tab = HexViewTab(self._rom_snapshot)
             self.tabs.addTab(hex_tab, "Hex Dump")
 
@@ -1158,6 +1357,11 @@ class MainWindow(QMainWindow):
         """Assemble current ROM from snapshot + in-memory edits, then apply
         checksum correction. Nothing is mutated until this is called."""
         rom = bytearray(self._rom_snapshot[:32768])
+        # Overview tab fields take priority — apply first, map tabs may overlap
+        if self._overview_tab:
+            for offset, byte in self._overview_tab.build_patches().items():
+                if offset < len(rom):
+                    rom[offset] = byte
         for tab in self._map_tabs:
             for offset, byte in tab.build_patch().items():
                 if offset < len(rom):
