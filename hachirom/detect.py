@@ -160,14 +160,21 @@ def _score_variant(rom32: bytes, variant: ROMVariant) -> int:
 
     # Variant-specific structural markers
     if vk == "AAH":
-        if rom32[0x077E] == 100:                        # injection scaler stock=100
-            score += 10
+        # AAH code extends well above 0x4000 — 4-cyl 266x ROMs do not.
+        # Robust across all tuned/edited AAH variants including Stage 1.
+        nff_high = sum(1 for b in rom32[0x4000:0x6700] if b != 0xFF)
+        if nff_high > 5000:
+            score += 40
+        elif nff_high > 1000:
+            score += 20
+        # Additional softer markers
         if 200 <= rom32[0x07E1] <= 255:                 # CL RPM high range
-            score += 5
-        if len(set(rom32[0x6700:0x6720])) > 8:          # cs region has varied data
             score += 5
 
     elif vk == "266D":
+        nff_high = sum(1 for b in rom32[0x4000:0x6700] if b != 0xFF)
+        if nff_high > 5000:                             # if high region full, NOT 266D
+            score -= 30
         blank_7e = sum(1 for b in rom32[0x7E00:0x7F00] if b == 0xFF)
         if blank_7e < 20:                               # 266D is fully programmed
             score += 15
@@ -175,9 +182,12 @@ def _score_variant(rom32: bytes, variant: ROMVariant) -> int:
             score += 5
 
     elif vk == "266B":
+        nff_high = sum(1 for b in rom32[0x4000:0x6700] if b != 0xFF)
+        if nff_high > 5000:                             # if high region full, NOT 266B
+            score -= 30
         blank_7e = sum(1 for b in rom32[0x7E00:0x7F00] if b == 0xFF)
         if blank_7e > 180:                              # 266B has large blank region
-            score += 25
+            score += 15                                 # reduced: not reliable alone
         if len(set(rom32[0x02D0:0x02E0])) > 4:         # MAF linearisation data
             score += 5
 
