@@ -1,0 +1,11 @@
+__pycache__/
+*.py[cod]
+*.pyo
+dist/
+build/
+*.spec
+*.egg-info/
+.venv/
+venv/
+*.bin
+!roms/.gitkeep
