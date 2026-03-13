@@ -179,17 +179,24 @@ from .roms import (MAF_AXIS_ADDR_FUEL, MAF_AXIS_ADDR_TIMING,
 
 def detect_maf_patch(data: bytes) -> str:
     """
-    Inspect the two MAF axis tables in a 266D ROM and return the profile key
-    that matches, or ``"unknown"`` if no known profile matches.
+    Inspect the two MAF axis tables in a 266D/266B ROM and return the profile
+    key that matches, or ``"unknown"`` if no known profile matches.
 
-    Returns one of: ``"stock_7a"`` | ``"vr6_tt225"`` | ``"s4_82mm"`` | ``"unknown"``
+    Returns one of:
+        ``"stock_7a"``        — 7A Hitachi sensor, 50mm stock housing (unmodified)
+        ``"aah_v6_housing"``  — 7A Hitachi sensor transplanted into 74mm AAH V6 housing
+        ``"sensor_1_8t_57"``  — Bosch 1.8T sensor, 57mm 1.8T housing  [EXPERIMENTAL]
+        ``"sensor_1_8t_vr6"`` — Bosch 1.8T sensor, 69.85mm VR6/TT225 housing  [EXPERIMENTAL]
+        ``"inconsistent"``    — fuel and timing axis copies disagree (ROM may be corrupt)
+        ``"unknown"``         — axis bytes don't match any known profile
 
     Detection strategy
     ------------------
     Both axis copies (fuel @ 0x05D0, timing @ 0x05E0) are checked.  The fuel
-    axis copy is the primary match target; the timing copy is used as a
-    cross-check.  If the two copies disagree the ROM is considered ``"unknown"``
-    so the UI can warn the user.
+    axis is the primary match target; the timing copy is used as a cross-check.
+    If the two copies disagree the ROM is flagged ``"inconsistent"`` so the UI
+    can warn the user.  ``"stock_7a"`` is a valid detection result — it means
+    the ROM has never been patched (or has been restored to stock).
     """
     if len(data) < MAF_AXIS_ADDR_TIMING + MAF_AXIS_LEN:
         return "unknown"
