@@ -240,6 +240,7 @@ ROM_AAH = ROMVariant(
     maps=_MAPS_AAH,
     checksum=CHECKSUM_PARAMS["AAH"],
     known_crc32s=[0x13db1432, 0x4818fa0b, 0x6875638d],
+    reset_vector=bytes([0xEF, 0x18]),
 )
 
 
@@ -257,4 +258,5 @@ for _v in ALL_VARIANTS:
 _RESET_VEC_MAP: dict[tuple, ROMVariant] = {
     (0xE8, 0xB1): ROM_266D,
     (0xD7, 0xBC): ROM_266B,
+    (0xEF, 0x18): ROM_AAH,
 }

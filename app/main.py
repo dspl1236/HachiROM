@@ -526,6 +526,43 @@ class ROMInfoWidget(QWidget):
 
 
 # ---------------------------------------------------------------------------
+# Hex viewer — shown for unknown/unrecognised ROMs
+# ---------------------------------------------------------------------------
+
+class HexViewTab(QWidget):
+    """Simple read-only hex dump. Shows all 32KB so you can at least inspect
+    and save any ROM even if the variant is unrecognised."""
+
+    BYTES_PER_ROW = 16
+
+    def __init__(self, data: bytes, parent=None):
+        super().__init__(parent)
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(6, 6, 6, 6)
+        note = QLabel(
+            "⚠  ROM variant not recognised — showing raw hex dump.  "
+            "You can still save this file using Save .bin… or Save 27C512 .bin…")
+        note.setStyleSheet("color:#ff9900; font-size:11px; padding:4px 0;")
+        note.setWordWrap(True)
+        layout.addWidget(note)
+        self.view = QTextEdit()
+        self.view.setReadOnly(True)
+        self.view.setFont(QFont("Consolas", 9))
+        layout.addWidget(self.view)
+        self._load(data)
+
+    def _load(self, data: bytes):
+        lines = []
+        bpr   = self.BYTES_PER_ROW
+        for i in range(0, min(len(data), 32768), bpr):
+            chunk = data[i:i + bpr]
+            hex_s = " ".join(f"{b:02X}" for b in chunk)
+            asc_s = "".join(chr(b) if 32 <= b < 127 else "." for b in chunk)
+            lines.append(f"{i:04X}:  {hex_s:<{bpr*3}}  {asc_s}")
+        self.view.setPlainText("\n".join(lines))
+
+
+# ---------------------------------------------------------------------------
 # Main Window
 # ---------------------------------------------------------------------------
 
@@ -689,13 +726,8 @@ class MainWindow(QMainWindow):
                 self._map_tabs.append(tab)
                 self.tabs.addTab(tab, m.name)
         else:
-            lbl = QLabel(
-                f"Unknown ROM variant — cannot display maps.\n\n"
-                f"CRC32: {result.crc32:#010x}\n"
-                f"SHA256: {result.sha256}\nSize: {len(data)} bytes")
-            lbl.setAlignment(Qt.AlignCenter)
-            lbl.setStyleSheet("color:#aaa;")
-            self.tabs.addTab(lbl, "Unknown")
+            hex_tab = HexViewTab(bytes(self.current_data))
+            self.tabs.addTab(hex_tab, "Hex Dump")
 
         self.compare_tab = CompareTab()
         self._compare_tab_idx = self.tabs.addTab(self.compare_tab, "⊕ Compare")
@@ -708,43 +740,23 @@ class MainWindow(QMainWindow):
     # ── Commit ────────────────────────────────────────────────────────────────
 
     def commit_edits(self):
-        """Flush all tab edits → current_data, refresh info, load compare."""
+        """Flush all tab edits into current_data and refresh checksum display."""
         self._collect_edits()
-
-        # Count total changed bytes across all tabs
         total_changed = sum(t.changed_count() for t in self._map_tabs)
-
-        # Refresh info panel with live (post-edit) data
         self.info_panel.update_rom(bytes(self.current_data))
-
-        # Update header checksum indicator
         if self.current_variant:
-            cs_ok = hr.verify_checksum(bytes(self.current_data), self.current_variant)
-            name  = Path(self.current_path).name
+            cs_ok  = hr.verify_checksum(bytes(self.current_data), self.current_variant)
             result = hr.detect(bytes(self.current_data))
             self.lbl_file.setText(
-                f"{name}  ·  {self.current_variant.name}  ·  "
+                f"{Path(self.current_path).name}  ·  {self.current_variant.name}  ·  "
                 f"CRC32 {result.crc32:#010x}  ·  "
-                f"{'✓ checksum OK' if cs_ok else '⚠ will fix on save'}"
-                f"  ·  {total_changed} cell(s) edited")
+                f"{'✓ checksum OK' if cs_ok else '⚠ will fix on save'}  ·  "
+                f"{total_changed} cell(s) edited")
             self.lbl_file.setStyleSheet(
                 "color:#2dff6e; font-size:11px;" if cs_ok
                 else "color:#ff9900; font-size:11px;")
-
-        # Load compare: committed state = ROM A,  original disk = ROM B
-        committed_label = f"committed  ({total_changed} edits)"
-        original_label  = f"{Path(self.current_path).name}  (original)"
-        self.compare_tab.load_pair(
-            bytes(self.current_data), committed_label,
-            self._original_data,      original_label,
-        )
-
-        # Switch to Compare tab
-        self.tabs.setCurrentIndex(self._compare_tab_idx)
-
         self.statusBar().showMessage(
-            f"Committed — {total_changed} cell(s) changed vs original  ·  "
-            f"Compare tab updated")
+            f"Committed — {total_changed} cell(s) edited vs original")
 
     # ── Save helpers ──────────────────────────────────────────────────────────
 
