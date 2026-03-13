@@ -237,3 +237,119 @@ def apply_maf_patch(data: bytes, profile_key: str) -> bytes:
         rom[MAF_AXIS_ADDR_FUEL   + i] = v
         rom[MAF_AXIS_ADDR_TIMING + i] = v
     return bytes(rom)
+
+
+# ---------------------------------------------------------------------------
+# CO pot (pin 4) disable patch — 266D only
+# ---------------------------------------------------------------------------
+#
+# Background
+# ----------
+# The 7A ECU reads an idle lambda trim voltage on MAF connector pin 4 from the
+# CO pot integrated inside the stock Hitachi sensor head.  Pin 4 is an ECU
+# INPUT — the pot wiper feeds a voltage back to the ECU; the ECU does not
+# source voltage on this pin.
+#
+# When fitting a replacement sensor with no CO pot (e.g. Bosch 1.8T) pin 4
+# is left floating.  The ECU sees this as out-of-range and stores fault 00521
+# "CO-Poti Unterbrechung oder Kurzschluss" (CO pot open/short circuit).
+#
+# This patch makes the ECU accept any voltage (including floating/0V) on
+# pin 4 without faulting, and zeros the trim gain so pin 4 has no effect on
+# fuelling.
+#
+# Bytes found by diffing two clean stock ROMs (266D stock .034 vs 266B stock
+# .034, both unscrambled) — confirmed identical in both variants (fixed
+# scalars, not calibration data):
+#
+#   0x0762 = 10  (0x0A) — CO pot ADC low fault threshold  (~0.20V)
+#   0x0763 = 238 (0xEE) — CO pot ADC high fault threshold (~4.67V)
+#   0x0777 = 128 (0x80) — CO pot neutral target (midpoint, 2.5V)
+#   0x0778 = 50  (0x32) — CO pot trim authority window (±50 ADC counts)
+#   0x0779 = 4   (0x04) — CO pot trim gain per ADC count
+#
+# Fault table entry (266D only — 266B has different fault layout):
+#   0x0AC9-0x0ACB = 02 09 1E  — fault 0x0209 (521 decimal), condition 0x1E
+#
+# Patch strategy
+# --------------
+# Three bytes are modified:
+#   0x0762 → 0x00  widen low  threshold to 0   (0.00V) — no low-side fault
+#   0x0763 → 0xFF  widen high threshold to 255 (5.00V) — no high-side fault
+#   0x0779 → 0x00  zero the trim gain           — pin 4 has zero effect on fuelling
+#
+# Result: fault 00521 is never triggered regardless of pin 4 voltage, and
+# the CO pot trim is permanently at neutral (0x0777 = 128 unchanged).
+# The neutral target byte (0x0777) and window byte (0x0778) are left as-is —
+# they are harmless with gain = 0.
+#
+# The fault table entry at 0x0AC9 is NOT modified — the fault can still be
+# manually read via VAG-COM if triggered by something else, but with thresholds
+# 0–255 it will never be triggered by a floating or resistor-held pin 4.
+#
+# Safe for: any 266D ROM with a 1.8T or other no-CO-pot MAF sensor fitted.
+# NOT needed when fitting the 7A Hitachi sensor into the AAH V6 housing
+# (CO pot is retained in that conversion — pin 4 wiring unchanged).
+# ---------------------------------------------------------------------------
+
+CO_POT_LOW_THRESHOLD_ADDR   = 0x0762   # ADC low  fault threshold (stock = 10)
+CO_POT_HIGH_THRESHOLD_ADDR  = 0x0763   # ADC high fault threshold (stock = 238)
+CO_POT_NEUTRAL_ADDR         = 0x0777   # neutral target ADC count  (stock = 128)
+CO_POT_WINDOW_ADDR          = 0x0778   # trim authority window      (stock = 50)
+CO_POT_GAIN_ADDR            = 0x0779   # trim gain per ADC count    (stock = 4)
+
+CO_POT_PATCH_ADDRS = {
+    CO_POT_LOW_THRESHOLD_ADDR:  0x00,   # widen: accept 0V
+    CO_POT_HIGH_THRESHOLD_ADDR: 0xFF,   # widen: accept 5V
+    CO_POT_GAIN_ADDR:           0x00,   # zero gain: trim has no effect
+}
+
+CO_POT_STOCK_ADDRS = {
+    CO_POT_LOW_THRESHOLD_ADDR:  0x0A,   # restore: 10 (~0.20V low threshold)
+    CO_POT_HIGH_THRESHOLD_ADDR: 0xEE,   # restore: 238 (~4.67V high threshold)
+    CO_POT_GAIN_ADDR:           0x04,   # restore: gain = 4
+}
+
+
+def detect_co_pot_patch(data: bytes) -> str:
+    """
+    Inspect the CO pot scalar bytes in a 266D ROM and return the patch state.
+
+    Returns:
+        ``"stock"``    — all three bytes at stock values (CO pot active)
+        ``"patched"``  — all three bytes at patched values (CO pot disabled)
+        ``"unknown"``  — bytes don't match either known state (manual edit?)
+    """
+    if len(data) < CO_POT_GAIN_ADDR + 1:
+        return "unknown"
+
+    is_patched = all(data[addr] == val for addr, val in CO_POT_PATCH_ADDRS.items())
+    is_stock   = all(data[addr] == val for addr, val in CO_POT_STOCK_ADDRS.items())
+
+    if is_patched:
+        return "patched"
+    if is_stock:
+        return "stock"
+    return "unknown"
+
+
+def apply_co_pot_patch(data: bytes, disable: bool = True) -> bytes:
+    """
+    Return a new bytes object with the CO pot trim either disabled or restored.
+
+    Parameters
+    ----------
+    data    : raw 32 768-byte 266D ROM
+    disable : True  → write patch values (disable CO pot, suppress fault 00521)
+              False → restore stock values
+
+    Raises ``ValueError`` if *data* is too short.
+    """
+    if len(data) < CO_POT_GAIN_ADDR + 1:
+        raise ValueError("ROM data too short for CO pot patch")
+
+    patch_map = CO_POT_PATCH_ADDRS if disable else CO_POT_STOCK_ADDRS
+    rom = bytearray(data)
+    for addr, val in patch_map.items():
+        rom[addr] = val
+    return bytes(rom)

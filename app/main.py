@@ -471,6 +471,114 @@ class MafPatchDialog(QDialog):
 
 
 # ---------------------------------------------------------------------------
+# CO pot patch dialog
+# ---------------------------------------------------------------------------
+
+class CoPotPatchDialog(QDialog):
+    """
+    Simple two-option dialog: disable CO pot trim or restore to stock.
+
+    Shown when the user clicks the CO Pot button in the toolbar.
+    Detects current state and pre-selects the appropriate option.
+    """
+
+    patch_requested = pyqtSignal(bool)   # True = disable, False = restore
+
+    def __init__(self, rom_data: bytes, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("CO Pot Patch")
+        self.setMinimumWidth(480)
+        self.setModal(True)
+
+        current_state = hr.detect_co_pot_patch(rom_data)
+        layout = QVBoxLayout(self)
+        layout.setSpacing(10)
+
+        # ── Current state banner ─────────────────────────────────────────────
+        if current_state == "patched":
+            banner_text  = "✓  CO pot trim currently <b>DISABLED</b>"
+            banner_style = "background:#0a2a0a; border:1px solid #2a6a2a; padding:8px; border-radius:3px;"
+            banner_color = "#2dff6e"
+        elif current_state == "stock":
+            banner_text  = "○  CO pot trim currently <b>ACTIVE (stock)</b>"
+            banner_style = "background:#1e1e1e; border:1px solid #555; padding:8px; border-radius:3px;"
+            banner_color = "#aaaaaa"
+        else:
+            banner_text  = "?  CO pot state <b>UNKNOWN</b> — bytes don't match stock or patched values"
+            banner_style = "background:#2a1a00; border:1px solid #664400; padding:8px; border-radius:3px;"
+            banner_color = "#ff9900"
+
+        banner_frame = QFrame()
+        banner_frame.setStyleSheet(banner_style)
+        banner_lay = QVBoxLayout(banner_frame)
+        banner_lay.setContentsMargins(4, 4, 4, 4)
+        banner_lay.addWidget(QLabel(
+            f"<span style='color:{banner_color};'>{banner_text}</span>",
+            textFormat=Qt.RichText))
+        layout.addWidget(banner_frame)
+
+        # ── What the patch does ──────────────────────────────────────────────
+        layout.addWidget(QLabel(
+            "<span style='color:#aaa; font-size:11px;'>"
+            "The CO pot trim uses ECU MAF connector pin 4 to apply a small idle lambda "
+            "correction via a pot inside the stock Hitachi sensor head.  When fitting a "
+            "sensor with no CO pot (e.g. Bosch 1.8T), pin 4 is unconnected — the ECU "
+            "stores fault 00521 and idle trim behaves unpredictably.<br><br>"
+            "<b>Disable</b> widens the fault thresholds to 0–5 V (no fault regardless "
+            "of pin 4 voltage) and zeros the trim gain (pin 4 has no effect on fuelling)."
+            "</span>",
+            textFormat=Qt.RichText))
+        layout.addWidget(QLabel(
+            "<span style='color:#aaa; font-size:11px;'>"
+            "<b>Patch bytes:</b>  "
+            "0x0762 (low threshold) → 0x00 &nbsp;·&nbsp; "
+            "0x0763 (high threshold) → 0xFF &nbsp;·&nbsp; "
+            "0x0779 (gain) → 0x00"
+            "</span>",
+            textFormat=Qt.RichText))
+
+        # ── Radio options ────────────────────────────────────────────────────
+        self._rb_disable = QRadioButton("Disable CO pot trim  (use when fitting 1.8T or other no-pot sensor)")
+        self._rb_restore = QRadioButton("Restore to stock  (re-enable CO pot trim — requires CO pot wired on pin 4)")
+
+        if current_state == "patched":
+            self._rb_restore.setChecked(True)
+        else:
+            self._rb_disable.setChecked(True)
+
+        for rb in (self._rb_disable, self._rb_restore):
+            rb.setStyleSheet("color:#d4d4d4;")
+            layout.addWidget(rb)
+
+        # ── Buttons ──────────────────────────────────────────────────────────
+        btns = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        ok_btn = btns.button(QDialogButtonBox.Ok)
+        ok_btn.setText("Apply Patch")
+        ok_btn.setStyleSheet(
+            "QPushButton{background:#0e639c;color:#fff;padding:5px 16px;"
+            "border:none;border-radius:3px;}"
+            "QPushButton:hover{background:#1177bb;}")
+        btns.accepted.connect(self._on_apply)
+        btns.rejected.connect(self.reject)
+        layout.addWidget(btns)
+
+        self.setStyleSheet("""
+            QDialog { background:#1e1e1e; color:#d4d4d4; }
+            QLabel  { color:#d4d4d4; }
+            QRadioButton { color:#d4d4d4; }
+            QDialogButtonBox QPushButton {
+                background:#333; color:#d4d4d4; padding:5px 14px;
+                border:1px solid #555; border-radius:3px;
+            }
+            QDialogButtonBox QPushButton:hover { background:#444; }
+        """)
+
+    def _on_apply(self):
+        self.patch_requested.emit(self._rb_disable.isChecked())
+        self.accept()
+
+
+# ---------------------------------------------------------------------------
 # Map tab
 # ---------------------------------------------------------------------------
 
@@ -1689,11 +1797,25 @@ class MainWindow(QMainWindow):
             "QPushButton:hover { background:#3d2700; }"
             "QPushButton:disabled { background:#1e1e1e; color:#444; border-color:#333; }")
 
+        self.btn_copot = QPushButton("CO Pot…")
+        self.btn_copot.setToolTip(
+            "Disable CO pot (pin 4) fault and trim\n"
+            "Use when fitting a sensor with no CO pot (e.g. 1.8T)\n"
+            "(266D only)")
+        self.btn_copot.clicked.connect(self.open_co_pot_patch)
+        self.btn_copot.setEnabled(False)
+        self.btn_copot.setStyleSheet(
+            "QPushButton { background:#001a2a; color:#4db8ff; border:1px solid #004466; "
+            "padding:5px 14px; border-radius:3px; }"
+            "QPushButton:hover { background:#002a3d; }"
+            "QPushButton:disabled { background:#1e1e1e; color:#444; border-color:#333; }")
+
         top.addWidget(self.lbl_file, 1)
         top.addWidget(btn_open)
         top.addWidget(self.btn_save)
         top.addWidget(self.btn_save512)
         top.addWidget(self.btn_maf)
+        top.addWidget(self.btn_copot)
         root.addLayout(top)
 
         splitter = QSplitter(Qt.Horizontal)
@@ -1827,6 +1949,19 @@ class MainWindow(QMainWindow):
                 f"Click to patch for a different MAF housing.")
         else:
             self.btn_maf.setText("MAF Patch…")
+
+        # CO pot patch button — 266D only
+        self.btn_copot.setEnabled(bool(is_266d))
+        if is_266d:
+            copot_state = hr.detect_co_pot_patch(data)
+            copot_label = {"stock": "stock", "patched": "disabled", "unknown": "unknown"}.get(copot_state, copot_state)
+            self.btn_copot.setText(f"CO Pot: {copot_label} ▾")
+            self.btn_copot.setToolTip(
+                f"CO pot trim state: {copot_label}\n"
+                f"Click to disable (for sensors without CO pot) or restore.")
+        else:
+            self.btn_copot.setText("CO Pot…")
+
 
         while self.tabs.count():
             self.tabs.removeTab(0)
@@ -1972,14 +2107,57 @@ class MainWindow(QMainWindow):
                f"{profile['housing']}\n{profile['hp_note']}")
         if not profile["co_pot"]:
             msg += (
-                "\n\n⚠  Hardware action required:\n"
-                "This sensor has no CO pot (wire 4).\n"
-                "Solder a 10 kΩ / 10 kΩ voltage divider from ECU 5 V ref\n"
-                "to GND and connect the midpoint (2.5 V) to ECU pin 4.\n"
-                "Do NOT leave pin 4 floating.")
+                "\n\n⚠  This sensor has no CO pot.\n"
+                "Use the CO Pot button in the toolbar to disable the CO pot trim\n"
+                "and suppress fault 00521 — no external pot required.")
         QMessageBox.information(self, "MAF Patch Applied", msg)
 
-    # ── Misc ─────────────────────────────────────────────────────────────────
+    # ── CO pot patch ──────────────────────────────────────────────────────────
+
+    def open_co_pot_patch(self):
+        """Open the CO pot patch dialog and apply the chosen option."""
+        if not self._rom_snapshot:
+            return
+        if not (self.current_variant and self.current_variant.version_key == "266D"):
+            QMessageBox.information(
+                self, "CO Pot Patch",
+                "CO pot patching is only supported for the 266D (7A Late) ECU.")
+            return
+
+        dlg = CoPotPatchDialog(self._rom_snapshot, parent=self)
+        if dlg.exec_() != QDialog.Accepted:
+            return
+
+        disable = dlg._rb_disable.isChecked()
+        try:
+            patched = hr.apply_co_pot_patch(self._rom_snapshot, disable=disable)
+        except Exception as e:
+            QMessageBox.critical(self, "CO Pot Patch Error", str(e))
+            return
+
+        self._rom_snapshot = patched
+        self._load_rom(self.current_path)
+
+        if disable:
+            msg = (
+                "CO pot trim DISABLED.\n\n"
+                "Patch applied:\n"
+                "  0x0762 → 0x00  (low threshold widened to 0 V)\n"
+                "  0x0763 → 0xFF  (high threshold widened to 5 V)\n"
+                "  0x0779 → 0x00  (trim gain zeroed)\n\n"
+                "Pin 4 can now be left unconnected without triggering fault 00521.\n"
+                "No CO pot hardware is required.")
+        else:
+            msg = (
+                "CO pot trim RESTORED to stock.\n\n"
+                "Original values restored:\n"
+                "  0x0762 → 0x0A  (low threshold ~0.20 V)\n"
+                "  0x0763 → 0xEE  (high threshold ~4.67 V)\n"
+                "  0x0779 → 0x04  (trim gain = 4)\n\n"
+                "⚠  CO pot must be wired on pin 4 or fault 00521 will return.")
+        QMessageBox.information(self, "CO Pot Patch Applied", msg)
+
+
 
     def _about(self):
         QMessageBox.about(self, f"HachiROM v{APP_VERSION}",
