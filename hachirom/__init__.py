@@ -37,7 +37,7 @@ from .roms   import (ROMVariant, MapDef, ALL_VARIANTS,
                      LOAD_AXIS, RPM_AXIS_AAH, LOAD_AXIS_AAH,
                      CHECKSUM_PARAMS)
 
-__version__ = "0.3.1"
+__version__ = "0.3.2"
 
 __all__ = [
     "detect", "load_bin", "save_bin", "load_bin_normalised", "DetectionResult",
