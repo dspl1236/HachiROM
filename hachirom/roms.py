@@ -56,6 +56,13 @@ LOAD_AXIS_AAH   = [12.6,18.8,23.5,28.2,32.9,38.4,43.9,50.2,56.5,62.8,69.0,75.3,8
 # MAF hardware patch tables — 266D and 266B only
 # (AAH uses a MAP-sensor-derived load axis, not a MAF ADC axis)
 #
+# ⚠ EXPERIMENTAL: All MAF axis patches (including stock_7a restore) involve
+# modifying fuel and timing map interpolation axes.  The 7A Hitachi profiles
+# are derived from physical ROM data and are the most reliable.  The 1.8T
+# sensor profiles are derived from published transfer function data and bore
+# area calculations — they have NOT been verified on a running engine.
+# Always verify fuelling with a wideband O2 sensor after applying any patch.
+#
 # The 266D/266B fuel/timing maps are indexed by MAF ADC counts (0-255 = 0-5V).
 # These tables are stored at TWO locations in the ROM:
 #   0x05D0 — fuel map MAF axis   (16 bytes)
@@ -73,30 +80,50 @@ LOAD_AXIS_AAH   = [12.6,18.8,23.5,28.2,32.9,38.4,43.9,50.2,56.5,62.8,69.0,75.3,8
 #     aah_v6_housing    7A sensor transplanted into 74mm AAH V6 housing
 #                       (plug-and-play CO pot, ROM patch required)
 #
-#   Group B — Bosch 1.8T sensor (3-wire, no CO pot — external pot required):
+#   Group B — Bosch 1.8T sensor (5-pin with integrated IAT, no CO pot)
+#   ⚠ EXPERIMENTAL — axis values unverified on engine:
 #     sensor_1_8t_57    1.8T sensor in 57mm 1.8T housing
 #     sensor_1_8t_vr6   1.8T sensor in 69.85mm VR6/TT225 housing
 #
-# CO pot — detailed wiring (source: 20v-sauger-tuning.de)
+# CO pot — pin 4 wiring (source: 20v-sauger-tuning.de; verified against
+#   external pot instructions which confirm pin 4 is an ECU input)
+#
 #   The stock 7A MAF (054 133 471 / A) is 4-pin:
-#     Pin 1: MAF signal (0-5V to ECU)
+#     Pin 1: MAF signal (0–5V) → ECU input
 #     Pin 2: Ground
 #     Pin 3: +12V supply
-#     Pin 4: CO pot signal
+#     Pin 4: CO pot wiper output → ECU input (1.0–7.5V)
 #
-#   The ECU sends ~9V on pin 4.  The original CO pot (integrated into the
-#   sensor head) divides this to 1.0–7.5V.  The ECU reads this voltage at
-#   idle to trim the lambda target — it is only active at idle.
-#   Fault code if missing: 00521 "CO-Poti Unterbrechung oder Kurzschluss"
-#   Symptoms: poor idle, stumble off idle, fault code stored.
-#   Normal driving is unaffected — CO pot is idle-only.
+#   Pin 4 is an INPUT to the ECU.  The CO pot inside the sensor head is
+#   powered internally (from pin 3) and its wiper feeds a divided voltage
+#   back to the ECU on pin 4.  The ECU reads this voltage at idle only to
+#   trim the lambda target.  Normal driving is completely unaffected.
+#   NOTE: an earlier version of this comment incorrectly stated the ECU
+#   "sends ~9V on pin 4" — this was a misreading of the source.  The ~9V
+#   figure may refer to the internal pot supply rail, not pin 4 itself.
+#   The exact internal pot supply voltage is unconfirmed; treat as TBD.
+#   Fault code if pin 4 open/shorted: 00521 "CO-Poti Unterbrechung"
+#   Symptoms: poor idle, stumble off idle.  Normal driving unaffected.
 #
-#   For 3-wire replacement sensors (no CO pot):
-#     External pot wiring (from 20v-sauger-tuning.de page 2):
-#       1 kΩ resistor from pot pin 1 → GND
-#       Pot wiper (pin 2) → original pin 4 wire (to ECU)
-#       20 kΩ 10-turn precision pot (Reichelt 534-20K or similar)
-#     This covers the 1–7.5V range, no fault code, adjustable like original.
+#   When fitting a sensor with no CO pot, pin 4 must be held at a voltage
+#   within the valid input range to avoid fault 00521 and idle trim errors.
+#   Two options:
+#
+#   Option A — External adjustable pot (original behaviour):
+#     Resistor divider using a 20 kΩ 10-turn precision pot (Reichelt 534-20K):
+#       Pin 1 of pot → GND (via 1 kΩ resistor)
+#       Pin 2 (wiper) → ECU pin 4 wire at MAF connector
+#       Pin 3 of pot → +12V (pin 3 of MAF connector)
+#     Adjust wiper to produce 1.0–7.5V on pin 4 for correct idle trim.
+#
+#   Option B — Fixed resistor divider (trim locked at neutral):
+#     Two resistors from pin 3 (+12V) to pin 2 (GND), wiper tapped between:
+#       R1 (pin3 → wiper): value TBD pending confirmation of pot supply voltage
+#       R2 (wiper → pin2): value TBD
+#     This holds pin 4 at ~neutral voltage → trim ≈ 0, no fault code.
+#     ⚠ Exact resistor values depend on confirmed pot supply voltage and
+#     the ECU's neutral ADC target — both currently unverified.
+#     Do NOT use Option B until these values are confirmed.
 #
 #   AAH V6 housing + 7A sensor transplant (plug-and-play option):
 #     Move the 7A sensor unit (054 133 471 A) into the AAH housing (078 133 471).
@@ -107,6 +134,7 @@ LOAD_AXIS_AAH   = [12.6,18.8,23.5,28.2,32.9,38.4,43.9,50.2,56.5,62.8,69.0,75.3,8
 #       078 133 471 A / AX have mirrored holes and different sensor depth — INCOMPATIBLE.
 #       054 133 471 A  (with Index A) fits directly; without Index A needs shim washers.
 # ---------------------------------------------------------------------------
+
 
 MAF_AXIS_ADDR_FUEL   = 0x05D0   # fuel map MAF axis location in ROM
 MAF_AXIS_ADDR_TIMING = 0x05E0   # timing map MAF axis location (identical copy)
@@ -195,26 +223,36 @@ MAF_PROFILES: dict = {
         "co_pot":        True,
         "plug_play":     True,
     },
-    # ── Group B — Bosch 1.8T sensor ───────────────────────────────────────
+    # ── Group B — Bosch 1.8T sensor ⚠ EXPERIMENTAL ───────────────────────
     "sensor_1_8t_57":   {
-        "label":        "1.8T sensor + 1.8T housing  (57mm)",
-        "group":        "Bosch 1.8T sensor  (3-wire — external CO pot required)",
+        "label":        "⚠ 1.8T sensor + 1.8T housing  (57mm)  [EXPERIMENTAL]",
+        "group":        "Bosch 1.8T sensor  (5-pin, IAT integrated — CO pot wiring required)  ⚠ EXPERIMENTAL",
         "axis":          MAF_AXIS_1_8T_57,
         "housing":      "Stock 1.8T MAF housing — Bosch 0280218114",
         "hp_note":      "Mild–moderate power upgrade",
         "co_pot":        False,
         "plug_play":     False,
-        "note":         "Axis derived from transfer function data — verify on dyno.",
+        "experimental":  True,
+        "note":         "EXPERIMENTAL — axis unverified on engine. "
+                        "Housing bore unconfirmed (community measurement ~60.3mm, "
+                        "not 57mm — recalculation needed). "
+                        "CO pot pin 4 must be held at neutral voltage (see docs). "
+                        "1.8T IAT pins (sensor pin 1 / pin 4) leave unconnected. "
+                        "Verify fuelling with wideband before road use.",
     },
     "sensor_1_8t_vr6":  {
-        "label":        "1.8T sensor + VR6/TT225 housing  (69.85mm)",
-        "group":        "Bosch 1.8T sensor  (3-wire — external CO pot required)",
+        "label":        "⚠ 1.8T sensor + VR6/TT225 housing  (69.85mm)  [EXPERIMENTAL]",
+        "group":        "Bosch 1.8T sensor  (5-pin, IAT integrated — CO pot wiring required)  ⚠ EXPERIMENTAL",
         "axis":          MAF_AXIS_1_8T_VR6,
         "housing":      "MK4 VR6 / Audi TT 225 housing — Bosch 0280218042 / 0280218116",
         "hp_note":      "~250–300 hp — K04 / hybrid turbo",
         "co_pot":        False,
         "plug_play":     False,
-        "note":         "Axis derived from transfer function data — verify on dyno.",
+        "experimental":  True,
+        "note":         "EXPERIMENTAL — axis unverified on engine. "
+                        "CO pot pin 4 must be held at neutral voltage (see docs). "
+                        "1.8T IAT pins (sensor pin 1 / pin 4) leave unconnected. "
+                        "Verify fuelling with wideband before road use.",
     },
 }
 

@@ -352,7 +352,30 @@ class MafPatchDialog(QDialog):
         if not any(rb.isChecked() for rb in self._buttons.values()):
             self._buttons["stock_7a"].setChecked(True)
 
-        # ── CO pot warning box (shown for 3-wire sensors only) ───────────────
+        # ── Experimental warning box ─────────────────────────────────────────
+        exp_box = QFrame()
+        exp_box.setStyleSheet(
+            "background:#1a0a0a; border:1px solid #882222; "
+            "padding:8px; border-radius:3px;")
+        exp_lay = QVBoxLayout(exp_box)
+        exp_lay.setSpacing(2)
+        exp_lay.addWidget(QLabel(
+            "<b style='color:#ff4444'>⚠  EXPERIMENTAL — not verified on a running engine</b>",
+            textFormat=Qt.RichText))
+        exp_lay.addWidget(QLabel(
+            "<span style='color:#aaa; font-size:11px;'>"
+            "The axis values for this profile are derived from published sensor "
+            "transfer function data and bore area calculations.  They have not been "
+            "validated on a live engine.  The 1.8T housing bore is also unconfirmed "
+            "(community measurement ~60.3 mm — axis recalculation pending).<br>"
+            "<b>You must verify fuelling with a wideband O2 sensor before any road use.</b>"
+            "</span>",
+            textFormat=Qt.RichText))
+        exp_box.setVisible(False)
+        layout.addWidget(exp_box)
+        self._exp_box = exp_box
+
+        # ── CO pot warning box ───────────────────────────────────────────────
         co_box = QFrame()
         co_box.setStyleSheet(
             "background:#1a1200; border:1px solid #664400; "
@@ -364,19 +387,25 @@ class MafPatchDialog(QDialog):
             textFormat=Qt.RichText))
         co_lay.addWidget(QLabel(
             "<span style='color:#aaa; font-size:11px;'>"
-            "This sensor has no CO pot.  ECU pin 4 must not be left floating or "
-            "fault code 00521 will be stored and idle will be affected.<br>"
-            "<b>Fix (from 20v-sauger-tuning.de):</b> wire a 1 kΩ resistor from "
-            "pot pin 1 to GND, connect the wiper (pin 2) to ECU pin 4.  "
-            "Use a 20 kΩ 10-turn pot (Reichelt 534-20K) for fine adjustment "
-            "over the 1.0–7.5 V range — identical behaviour to the original CO pot."
+            "Pin 4 on the 7A MAF connector is an <b>input</b> to the ECU — the CO pot "
+            "wiper feeds a voltage (1.0–7.5 V) back to the ECU for idle lambda trim. "
+            "This sensor has no CO pot.  Pin 4 must not be left floating or "
+            "fault code 00521 will be stored and idle will be affected.<br><br>"
+            "<b>Option A — adjustable (matches original behaviour):</b><br>"
+            "Wire a 20 kΩ 10-turn pot (Reichelt 534-20K): "
+            "pin 1 → GND via 1 kΩ resistor, wiper → ECU pin 4.  "
+            "Adjust for correct idle trim over the 1.0–7.5 V range.<br><br>"
+            "<b>Option B — fixed neutral (trim locked at zero):</b><br>"
+            "Resistor divider from pin 3 (+12V) to pin 2 (GND), wiper to ECU pin 4. "
+            "<i>Exact resistor values TBD — pot supply voltage unconfirmed. "
+            "Do not use until values are verified.</i>"
             "</span>",
             textFormat=Qt.RichText))
         co_box.setVisible(False)
         layout.addWidget(co_box)
         self._co_box = co_box
 
-        # Update CO warning visibility when selection changes
+        # Update warning visibility when selection changes
         for key, rb in self._buttons.items():
             rb.toggled.connect(lambda checked, k=key: self._on_profile_changed(k, checked))
 
@@ -422,9 +451,9 @@ class MafPatchDialog(QDialog):
     def _on_profile_changed(self, key: str, checked: bool):
         if not checked:
             return
-        # Show CO pot warning for any non-stock sensor
-        needs_co_fix = not hr.MAF_PROFILES[key]["co_pot"]
-        self._co_box.setVisible(needs_co_fix)
+        p = hr.MAF_PROFILES[key]
+        self._exp_box.setVisible(bool(p.get("experimental", False)))
+        self._co_box.setVisible(not p["co_pot"])
 
     def _on_apply(self):
         for key, rb in self._buttons.items():
