@@ -471,11 +471,361 @@ class CompareTab(QWidget):
 # ROM Info panel
 # ---------------------------------------------------------------------------
 
+# ---------------------------------------------------------------------------
+# Per-map tuning tips — shown in sidebar when a map tab is active
+# Keys match MapDef.name exactly.
+# ---------------------------------------------------------------------------
+
+_MAP_TIPS: dict[str, dict] = {
+    "Primary Fueling": {
+        "what":  "The main fuel delivery table. Each cell sets the injector "
+                 "pulse width (or lambda target on B/AAH) at a given RPM and "
+                 "engine load (MAP sensor pressure).",
+        "tips": [
+            "Richer (higher value) = more fuel. Lean (lower) = less fuel.",
+            "Work across the load axis first — wide-open throttle is the "
+            "bottom rows, idle is the top.",
+            "Fix idle and cruise before touching WOT cells.",
+            "After any change, commit and verify the checksum before saving.",
+        ],
+        "caution": "Lean WOT cells cause knock and piston damage. Always run "
+                   "richer than stoichiometric under high load.",
+    },
+    "Primary Timing": {
+        "what":  "Ignition advance in degrees BTDC at each RPM/load point. "
+                 "More advance = spark fires earlier. The ECU uses this map "
+                 "under normal (no-knock) conditions.",
+        "tips": [
+            "Advance (higher) improves power but risks knock on poor fuel.",
+            "Retard (lower) under high load/low RPM to prevent detonation.",
+            "Idle timing affects idle quality — typically 10-15° BTDC.",
+            "Changes here are overridden by the Knock Safety map if knock "
+            "is detected.",
+        ],
+        "caution": "Excessive advance causes detonation — start conservative "
+                   "and verify with a knock sensor or wideband O2.",
+    },
+    "Timing Knock Safety": {
+        "what":  "Fallback timing map used by the ECU when knock is detected. "
+                 "The ECU blends toward this map and recovers gradually. "
+                 "Should always be more retarded than Primary Timing.",
+        "tips": [
+            "Keep this 4-8° retarded vs Primary Timing across the whole map.",
+            "Changing this affects how aggressively the ECU responds to knock.",
+            "On a stock engine, this rarely needs editing.",
+            "On a tuned or high-compression build, verify the retard amount "
+            "is enough to stop knock before the engine recovers timing.",
+        ],
+        "caution": "If this map is more advanced than Primary Timing in any "
+                   "cell, knock recovery will be ineffective.",
+    },
+    "After-start Enrichment": {
+        "what":  "Extra fuel added immediately after a cold start, tapering "
+                 "off as the engine warms. Indexed by coolant temperature. "
+                 "Decoded as lambda — lower = richer.",
+        "tips": [
+            "Stock taper: λ 1.5 → 1.25 from cold to warm.",
+            "If the engine stumbles or stalls in the first 30s after cold "
+            "start, richen the cold end (left cells).",
+            "If it runs black smoke on cold start, lean the left cells.",
+            "The warmup idle speed target works alongside this map.",
+        ],
+        "caution": None,
+    },
+    "Idle Speed Target": {
+        "what":  "Target idle RPM at each coolant temperature step. The ECU "
+                 "drives the idle air control valve toward this speed. "
+                 "Raw value × 25 = RPM.",
+        "tips": [
+            "Stock: ~3600 RPM cold (raw 144), ~800 RPM warm (raw 32).",
+            "Raising cold-idle RPM helps warm-up on tight clearance engines.",
+            "Lowering warm-idle RPM saves fuel and reduces vibration.",
+            "Pairs with Idle Ignition Trim — both affect idle quality.",
+        ],
+        "caution": "Too low at cold temperatures will cause stalling.",
+    },
+    "Idle Ignition Trim": {
+        "what":  "Timing correction applied at idle vs coolant temperature. "
+                 "Signed value in degrees — positive = advance, negative = retard. "
+                 "Added on top of the Primary Timing map at idle.",
+        "tips": [
+            "Stock: +7° warm, -9° cold (retards cold idle to improve warm-up).",
+            "Advancing idle timing can raise idle RPM without touching the "
+            "idle speed valve.",
+            "Retarding improves idle smoothness on high-overlap cams.",
+        ],
+        "caution": None,
+    },
+    "Accel Enrichment": {
+        "what":  "Extra fuel injected on sudden throttle opening (tip-in). "
+                 "Indexed by RPM — the pulse is smaller at high RPM where "
+                 "airflow change is faster.",
+        "tips": [
+            "Stock: 104 at idle, tapering to 48 at 6000 RPM.",
+            "If the engine stumbles on quick throttle blips, increase the "
+            "low-RPM cells.",
+            "If it runs rich momentarily on tip-in (black puff), reduce.",
+            "Accel Decay controls how fast this extra fuel fades away.",
+        ],
+        "caution": None,
+    },
+    "Accel Decay": {
+        "what":  "How quickly the accel enrichment pulse fades after tip-in. "
+                 "Higher value = faster decay (shorter enrichment). "
+                 "Indexed by RPM.",
+        "tips": [
+            "Stock: exponential 100 → 2 across RPM range.",
+            "Increase (faster decay) if tip-in richness lingers too long.",
+            "Decrease (slower decay) if stumble persists after the initial blip.",
+            "Works together with Accel Enrichment amount.",
+        ],
+        "caution": None,
+    },
+    "CL Load Threshold": {
+        "what":  "The MAP sensor load level above which closed-loop lambda "
+                 "control is disabled, per RPM column. Below this load the "
+                 "ECU uses the O2 sensor to trim fuelling.",
+        "tips": [
+            "Lower values = closed loop active over a wider load range.",
+            "At WOT the ECU should always be open loop (fuel map only).",
+            "On a modified engine, running CL at cruise is generally fine "
+            "but disable it at moderate+ load.",
+        ],
+        "caution": None,
+    },
+    "CL Disable RPM": {
+        "what":  "A single RPM value above which closed-loop O2 correction "
+                 "is always disabled regardless of load. Raw × 25 = RPM.",
+        "tips": [
+            "Stock is typically around 3000-4000 RPM.",
+            "On a tuned engine, lowering this ensures the fuel map is "
+            "followed precisely at high RPM.",
+        ],
+        "caution": None,
+    },
+    "Decel Cutoff": {
+        "what":  "The MAP pressure threshold below which the ECU cuts "
+                 "injectors during deceleration (overrun), per RPM. "
+                 "Prevents fuel waste and exhaust popping.",
+        "tips": [
+            "Higher threshold = fuel cut active over a wider decel range.",
+            "If the car surges or hunts on decel, lower the relevant RPM cells.",
+            "If you want more exhaust pops / anti-lag feel, lower this "
+            "to allow fuel on overrun.",
+        ],
+        "caution": None,
+    },
+    "Injection Scaler": {
+        "what":  "A single global scalar applied to all injector pulse widths. "
+                 "Stock = 100. Increasing this richens the entire fuel map "
+                 "proportionally — used for larger injectors.",
+        "tips": [
+            "Formula: new_scaler = old_scaler × (new_injector_cc / stock_cc).",
+            "Stock 7A injectors are ~205 cc/min.",
+            "After changing this, the whole fuel map will need retuning.",
+            "Do not use this as a coarse idle richness trim — edit the "
+            "fuel map cells directly instead.",
+        ],
+        "caution": "Setting this too high will flood the engine. Change in "
+                   "small steps with the fuel map leaned out first.",
+    },
+    "MAF Linearization": {
+        "what":  "266B only. Lookup table that converts raw MAF sensor counts "
+                 "to airflow. 64 × 16-bit big-endian entries.",
+        "tips": [
+            "This is a sensor characterisation table, not a tuning map.",
+            "Only edit this if fitting a different MAF sensor body.",
+            "Incorrect values cause systematic fuelling error across all RPM.",
+        ],
+        "caution": "Errors here affect every single fuel calculation. "
+                   "Only modify if you have airflow bench data for the new sensor.",
+    },
+    "RPM Axis (Fuel)": {
+        "what":  "The 16 RPM breakpoints that define the columns of the fuel map. "
+                 "Raw × 25 = RPM.",
+        "tips": [
+            "Add more breakpoints in the region you care about (e.g. 2500-4000 "
+            "for a forced-induction tune).",
+            "Values must be strictly ascending.",
+            "Changing axes shifts all existing map cells — re-verify the map "
+            "after any axis edit.",
+        ],
+        "caution": None,
+    },
+    "Load Axis (Fuel)": {
+        "what":  "The 16 MAP pressure breakpoints for the fuel map columns. "
+                 "Raw × 0.3922 = kPa.",
+        "tips": [
+            "Higher load values extend the map into boost (for supercharged "
+            "or turbocharged builds).",
+            "Values must be strictly ascending.",
+        ],
+        "caution": None,
+    },
+    "RPM Axis (Timing)": {
+        "what":  "The 16 RPM breakpoints for the timing maps. Raw × 25 = RPM. "
+                 "Starts at 600 RPM (slightly different to fuel axis).",
+        "tips": [
+            "Keep timing and fuel axes aligned if possible — mismatched "
+            "breakpoints make interpolation harder to reason about.",
+        ],
+        "caution": None,
+    },
+    "Load Axis (Timing)": {
+        "what":  "The 16 MAP pressure breakpoints for the timing maps. "
+                 "Raw × 0.3922 = kPa.",
+        "tips": [
+            "Same encoding as fuel load axis.",
+            "Matching fuel and timing axes simplifies the tuning workflow.",
+        ],
+        "caution": None,
+    },
+}
+
+_WELCOME_PANEL = {
+    "what":  "Open a ROM file to begin. Supported formats: .bin (32KB native "
+             "or 64KB 27C512 image), .034 (scrambled). "
+             "27C512 images are automatically unwrapped.",
+    "tips": [
+        "Double-click any cell in a map tab to edit it.",
+        "Changed cells get a green border so you can track what moved.",
+        "Use Commit to flush edits and refresh the checksum.",
+        "Save .bin for the Teensy SD card. Save 27C512 for EPROM programmers.",
+    ],
+    "caution": None,
+}
+
+_COMPARE_PANEL = {
+    "what":  "Side-by-side diff of two ROM files. Load a baseline (e.g. stock) "
+             "and a modified ROM to see exactly which cells changed and by how much.",
+    "tips": [
+        "Load the original as ROM A, your edited version as ROM B.",
+        "Cells shown in red/green indicate fuel or timing changes.",
+        "Use this to document what a tune changed, or to sanity-check "
+        "a ROM from an unknown source before flashing.",
+    ],
+    "caution": None,
+}
+
+_HEX_PANEL = {
+    "what":  "Raw hex dump of the ROM. Shown when the variant could not be "
+             "identified — all 32KB displayed for inspection.",
+    "tips": [
+        "You can still save an unknown ROM using the save buttons.",
+        "Check the detection notes in the ROM Info panel below for clues "
+        "about why identification failed.",
+        "If this is a known ECU type, consider submitting the CRC32 "
+        "to the HachiROM project so it can be added.",
+    ],
+    "caution": "Do not flash an unidentified ROM — verify the variant first.",
+}
+
+
+class MapInfoPanel(QWidget):
+    """Top section of the right sidebar. Updates when the tab changes."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(6, 6, 6, 6)
+        layout.setSpacing(6)
+
+        # Header: map name + address
+        self.lbl_name = QLabel("HachiROM")
+        self.lbl_name.setStyleSheet(
+            "font-size:13px; font-weight:bold; color:#e0e0e0;")
+        self.lbl_name.setWordWrap(True)
+        layout.addWidget(self.lbl_name)
+
+        self.lbl_addr = QLabel("")
+        self.lbl_addr.setStyleSheet("font-size:10px; color:#888;")
+        layout.addWidget(self.lbl_addr)
+
+        sep = QFrame()
+        sep.setFrameShape(QFrame.HLine)
+        sep.setStyleSheet("color:#333;")
+        layout.addWidget(sep)
+
+        # Description
+        self.lbl_what = QLabel("")
+        self.lbl_what.setWordWrap(True)
+        self.lbl_what.setStyleSheet("font-size:11px; color:#ccc; padding:2px 0;")
+        layout.addWidget(self.lbl_what)
+
+        # Tips
+        self.lbl_tips_hdr = QLabel("Tuning tips")
+        self.lbl_tips_hdr.setStyleSheet(
+            "font-size:10px; font-weight:bold; color:#aaa; margin-top:6px;")
+        layout.addWidget(self.lbl_tips_hdr)
+
+        self.lbl_tips = QLabel("")
+        self.lbl_tips.setWordWrap(True)
+        self.lbl_tips.setStyleSheet("font-size:11px; color:#bbb;")
+        layout.addWidget(self.lbl_tips)
+
+        # Caution
+        self.lbl_caution = QLabel("")
+        self.lbl_caution.setWordWrap(True)
+        self.lbl_caution.setStyleSheet(
+            "font-size:11px; color:#ff9900; "
+            "background:#2a1a00; border-radius:4px; padding:4px 6px;")
+        self.lbl_caution.hide()
+        layout.addWidget(self.lbl_caution)
+
+        layout.addStretch()
+
+    def update_map(self, name: str, map_def=None, info: dict | None = None):
+        """Show description and tips for the given map tab.
+
+        info: one of _MAP_TIPS[name], _WELCOME_PANEL, _COMPARE_PANEL, _HEX_PANEL.
+        If not provided, falls back to _MAP_TIPS lookup, then a generic placeholder.
+        """
+        if info is None:
+            info = _MAP_TIPS.get(name, {})
+
+        self.lbl_name.setText(name)
+
+        if map_def is not None:
+            shape = (f"0x{map_def.address:04X}  ·  "
+                     f"{map_def.rows}×{map_def.cols}  ·  "
+                     f"{map_def.size}B  ·  {map_def.unit or 'raw'}")
+            self.lbl_addr.setText(shape)
+            self.lbl_addr.show()
+        else:
+            self.lbl_addr.hide()
+
+        what = info.get("what", "")
+        self.lbl_what.setText(what)
+        self.lbl_what.setVisible(bool(what))
+
+        tips = info.get("tips", [])
+        if tips:
+            self.lbl_tips.setText("\n".join(f"• {t}" for t in tips))
+            self.lbl_tips.show()
+            self.lbl_tips_hdr.show()
+        else:
+            self.lbl_tips.hide()
+            self.lbl_tips_hdr.hide()
+
+        caution = info.get("caution")
+        if caution:
+            self.lbl_caution.setText(f"⚠  {caution}")
+            self.lbl_caution.show()
+        else:
+            self.lbl_caution.hide()
+
+
 class ROMInfoWidget(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(4, 4, 4, 4)
+        layout.setContentsMargins(4, 0, 4, 4)
+
+        hdr = QLabel("ROM Info")
+        hdr.setStyleSheet(
+            "font-size:10px; font-weight:bold; color:#aaa; padding:2px 0;")
+        layout.addWidget(hdr)
+
         self.text = QTextEdit()
         self.text.setReadOnly(True)
         self.text.setFont(QFont("Consolas", 9))
@@ -649,9 +999,23 @@ class MainWindow(QMainWindow):
 
         splitter = QSplitter(Qt.Horizontal)
         self.tabs = QTabWidget()
+        self.tabs.currentChanged.connect(self._on_tab_changed)
         splitter.addWidget(self.tabs)
+
+        # Right sidebar: map context panel (top) + ROM info (bottom)
+        sidebar        = QWidget()
+        sb_layout      = QVBoxLayout(sidebar)
+        sb_layout.setContentsMargins(0, 0, 0, 0)
+        sb_layout.setSpacing(0)
+        self.map_panel  = MapInfoPanel()
         self.info_panel = ROMInfoWidget()
-        splitter.addWidget(self.info_panel)
+        sb_splitter     = QSplitter(Qt.Vertical)
+        sb_splitter.addWidget(self.map_panel)
+        sb_splitter.addWidget(self.info_panel)
+        sb_splitter.setSizes([340, 420])
+        sb_layout.addWidget(sb_splitter)
+
+        splitter.addWidget(sidebar)
         splitter.setSizes([900, 380])
         root.addWidget(splitter, 1)
 
@@ -675,6 +1039,27 @@ class MainWindow(QMainWindow):
         self.statusBar().showMessage(f"HachiROM v{APP_VERSION} ready")
 
     # ── ROM open ──────────────────────────────────────────────────────────────
+
+    # -- Tab change -> update map info panel ------------------------------------
+
+    def _on_tab_changed(self, index: int):
+        if index < 0:
+            return
+        widget = self.tabs.widget(index)
+        name   = self.tabs.tabText(index)
+
+        if isinstance(widget, MapTab):
+            self.map_panel.update_map(
+                widget.map_def.name,
+                map_def=widget.map_def,
+                info=_MAP_TIPS.get(widget.map_def.name),
+            )
+        elif "Compare" in name:
+            self.map_panel.update_map("Compare", info=_COMPARE_PANEL)
+        elif "Hex" in name:
+            self.map_panel.update_map("Hex Dump", info=_HEX_PANEL)
+        else:
+            self.map_panel.update_map("HachiROM", info=_WELCOME_PANEL)
 
     def open_rom(self):
         path, _ = QFileDialog.getOpenFileName(
@@ -897,3 +1282,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
