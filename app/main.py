@@ -683,11 +683,19 @@ class MainWindow(QMainWindow):
         if not path:
             return
         try:
-            data = hr.load_bin(path)
-            if path.lower().endswith(".034"):
-                data = hr.unscramble_034(data)
-            self._original_data = bytes(data)        # immutable baseline
-            self.current_data   = bytearray(data)    # working copy
+            raw_size = Path(path).stat().st_size
+            rom32, load_notes = hr.load_bin_normalised(path)
+
+            # If normalisation did something non-trivial, tell the user
+            if load_notes:
+                msg = "\n".join(f"• {n}" for n in load_notes)
+                QMessageBox.information(
+                    self, "File Normalised",
+                    f"The file was adjusted before loading:\n\n{msg}\n\n"
+                    f"Original size: {raw_size:,} bytes  →  working with 32KB ROM.")
+
+            self._original_data = bytes(rom32)
+            self.current_data   = bytearray(rom32)
             self.current_path   = path
             self._load_rom(path)
         except Exception as e:

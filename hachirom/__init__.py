@@ -22,7 +22,7 @@ Teensy bridge
     )
 """
 
-from .detect import detect, load_bin, save_bin, DetectionResult
+from .detect import detect, load_bin, save_bin, load_bin_normalised, DetectionResult
 from .maps   import (read_map, read_map_decoded, write_map, write_map_encoded,
                      read_axis, read_scalar, write_scalar,
                      compute_sum, verify_checksum, apply_checksum,
@@ -40,7 +40,7 @@ from .roms   import (ROMVariant, MapDef, ALL_VARIANTS,
 __version__ = "0.2.0"
 
 __all__ = [
-    "detect", "load_bin", "save_bin", "DetectionResult",
+    "detect", "load_bin", "save_bin", "load_bin_normalised", "DetectionResult",
     "read_map", "read_map_decoded", "write_map", "write_map_encoded",
     "read_axis", "read_scalar", "write_scalar",
     "compute_sum", "verify_checksum", "apply_checksum",
