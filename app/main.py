@@ -66,10 +66,20 @@ from PyQt5.QtGui import QPainter, QPen
 from PyQt5.QtCore import QRect
 
 class ChangedCellDelegate(QStyledItemDelegate):
-    """Draws a green border around cells whose UserRole == 'changed'."""
+    """Draws a green border around cells whose UserRole == 'changed'.
+    Also tracks which index is being edited so _on_commit can reliably
+    retrieve r,c regardless of where focus moves on Tab/Enter."""
 
     BORDER_COLOUR = QColor("#2dff6e")
     BORDER_WIDTH  = 2
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.editing_index = None   # set in createEditor, read in _on_commit
+
+    def createEditor(self, parent, option, index):
+        self.editing_index = index
+        return super().createEditor(parent, option, index)
 
     def paint(self, painter: QPainter, option, index):
         super().paint(painter, option, index)
@@ -77,7 +87,6 @@ class ChangedCellDelegate(QStyledItemDelegate):
             painter.save()
             pen = QPen(self.BORDER_COLOUR, self.BORDER_WIDTH)
             painter.setPen(pen)
-            # Inset rect slightly so border doesn't overlap neighbours
             r = option.rect.adjusted(1, 1, -1, -1)
             painter.drawRect(r)
             painter.restore()
@@ -300,10 +309,10 @@ class MapTab(QWidget):
 
     def _on_commit(self, editor):
         """Called by the delegate exactly once when user confirms a cell edit."""
-        idx  = self.table.currentIndex()
-        r, c = idx.row(), idx.column()
-        if r < 0 or c < 0:
+        idx = self.table.itemDelegate().editing_index
+        if idx is None or not idx.isValid():
             return
+        r, c = idx.row(), idx.column()
         text = editor.text()
         raw  = self._encode(text)
 
