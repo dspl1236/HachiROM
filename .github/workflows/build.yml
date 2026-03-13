@@ -55,10 +55,11 @@ jobs:
             dist/exe_name.txt
 
   build-macos:
-    # macos-13 = Intel runner — PyQt5 wheels are reliable here.
-    # macos-latest (Apple Silicon) has PyQt5 pip issues; revisit when
-    # we move to PyQt6.
-    runs-on: macos-13
+    # Try macos-latest (Apple Silicon). PyQt5 wheels may work via pip's
+    # universal2 or x86_64 builds under Rosetta on the runner.
+    # If this fails consistently, we'll drop macOS CI and document
+    # "build from source" until the PyQt6 migration.
+    runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
