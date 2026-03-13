@@ -1132,6 +1132,17 @@ class MainWindow(QMainWindow):
 
     # ── Save helpers ──────────────────────────────────────────────────────────
 
+    def _build_rom(self) -> bytearray:
+        """Assemble current ROM from snapshot + in-memory edits, then apply
+        checksum correction. Nothing is mutated until this is called."""
+        rom = bytearray(self._rom_snapshot[:32768])
+        for tab in self._map_tabs:
+            for offset, byte in tab.build_patch().items():
+                if offset < len(rom):
+                    rom[offset] = byte
+        if self.current_variant:
+            return hr.apply_checksum(bytes(rom), self.current_variant)
+        return rom
 
     def save_rom(self):
         """Save 32KB .bin — assembles from in-memory edits, corrects checksum."""
