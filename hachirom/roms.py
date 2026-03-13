@@ -80,6 +80,10 @@ LOAD_AXIS_AAH   = [12.6,18.8,23.5,28.2,32.9,38.4,43.9,50.2,56.5,62.8,69.0,75.3,8
 #     aah_v6_housing    7A sensor transplanted into 74mm AAH V6 housing
 #                       (plug-and-play CO pot, ROM patch required)
 #
+#   Group A2 — AAH V6 Hitachi sensor (3-pin, no CO pot — same element, same axis):
+#     aah_v6_3wire      AAH V6 housing used as-is with its own 3-pin sensor
+#                       Same MAF axis as aah_v6_housing — CO pot patch required
+#
 #   Group B — Bosch 1.8T sensor (5-pin with integrated IAT, no CO pot)
 #   ⚠ EXPERIMENTAL — axis values unverified on engine:
 #     sensor_1_8t_60    1.8T sensor in 60mm 1.8T housing
@@ -152,14 +156,13 @@ MAF_AXIS_LEN         = 16       # 16 breakpoints
 #     Fits: 60mm 1.8T housing, 69.85mm VR6/TT225 housing
 #     Does NOT fit: 50mm or 74mm VAG housings (different internal geometry)
 #
-# This gives exactly four valid hardware combinations:
+# This gives five valid hardware combinations:
 #
-#   stock_7a          7A sensor  + 50mm housing   — stock, CO pot retained
-#   aah_v6_housing    7A sensor  + 74mm AAH housing — CO pot retained, ROM patch needed
-#   sensor_1_8t_60    1.8T sensor + 60mm 1.8T housing — CO pot wiring required
-#   sensor_1_8t_vr6   1.8T sensor + 69.85mm VR6/TT225 housing — CO pot wiring required
-#   sensor_1_8t_57    1.8T sensor + 57mm 1.8T housing  — 3-wire, external CO pot
-#   sensor_1_8t_vr6   1.8T sensor + 69.85mm VR6 housing — 3-wire, external CO pot
+#   stock_7a          7A sensor  + 50mm housing        — stock, CO pot retained
+#   aah_v6_housing    7A sensor  + 74mm AAH housing     — CO pot retained, ROM patch needed
+#   aah_v6_3wire      AAH sensor + 74mm AAH housing     — 3-wire, CO pot patch required
+#   sensor_1_8t_60    1.8T sensor + 60mm 1.8T housing  — CO pot patch required
+#   sensor_1_8t_vr6   1.8T sensor + 69.85mm VR6/TT225  — CO pot patch required
 
 # ── Group A — 7A Hitachi sensor ─────────────────────────────────────────────
 
@@ -180,6 +183,10 @@ MAF_AXIS_STOCK_7A   = [5, 10, 20, 30, 50, 62, 75, 87, 116, 131, 145, 160, 225, 2
 # IMPORTANT part number: use 078 133 471 (no suffix only).
 #   078 133 471 A / AX — mirrored holes, different depth — INCOMPATIBLE.
 #   054 133 471 A (with Index A) fits directly; without Index A needs shim washers.
+#
+# This axis is also shared by the aah_v6_3wire profile — the AAH V6 stock sensor
+# (078 133 471, 3-pin, no CO pot) uses the same Hitachi element in the same 74mm
+# housing. Transfer function is identical; only the connector and CO pot differ.
 MAF_AXIS_AAH_V6     = [4, 8, 16, 25, 41, 51, 62, 72, 95, 108, 119, 132, 185, 200, 255, 255]
 
 # ── Group B — Bosch 1.8T sensor (0280218114) ────────────────────────────────
@@ -225,6 +232,22 @@ MAF_PROFILES: dict = {
         "hp_note":      "NA / mild boost — CO pot retained, ROM patch required",
         "co_pot":        True,
         "plug_play":     True,
+    },
+    "aah_v6_3wire":     {
+        "label":        "AAH V6 housing + AAH sensor  (74mm, 3-wire)",
+        "group":        "7A Hitachi sensor",
+        "axis":          MAF_AXIS_AAH_V6,
+        "housing":      "078 133 471 (no suffix) — stock AAH sensor, 3-pin connector",
+        "hp_note":      "NA / mild boost — same axis as 7A transplant, CO pot patch required",
+        "co_pot":        False,
+        "plug_play":     False,
+        "note":         "AAH V6 sensor (078 133 471) uses the same Hitachi hot-wire element "
+                        "as the 7A sensor in the same 74mm housing — transfer function identical. "
+                        "Connector is 3-pin (power, ground, signal only — no CO pot wire). "
+                        "Source: 20v-sauger-tuning.de. "
+                        "Apply CO pot patch to suppress fault 00521 and leave pin 4 open. "
+                        "Wiring: 7A pin 3 → AAH pin 3 (+12V), 7A pin 2 → AAH pin 2 (GND), "
+                        "7A pin 1 → AAH pin 1 (signal). Pin 4 — apply CO pot ROM patch, leave open.",
     },
     # ── Group B — Bosch 1.8T sensor ⚠ EXPERIMENTAL ───────────────────────
     "sensor_1_8t_60":   {

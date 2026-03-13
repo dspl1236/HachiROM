@@ -49,7 +49,40 @@ airflow and run rich.
 
 ---
 
-## Bosch 1.8T Sensor Conversion ⚠ EXPERIMENTAL
+## AAH V6 Housing + AAH Sensor (3-wire, direct fit)
+
+**Sensor:** AAH V6 stock sensor — 078 133 471 (no suffix)  
+**Housing:** Same unit — sensor and housing are one assembly  
+**Connector:** 3-pin  
+**ROM profile:** `aah_v6_3wire`
+
+The AAH V6 stock MAF sensor uses the same Hitachi hot-wire element in the same
+74mm housing as the 7A transplant mod above. The difference is the connector:
+the AAH ECU handles idle trim via self-learning so the 4th CO pot wire was
+removed — the sensor is 3-pin only.
+
+Because the element and housing are identical, the MAF axis is the same as
+`aah_v6_housing`. Only the connector pinout and CO pot handling differ.
+
+**Source:** 20v-sauger-tuning.de — explicitly confirms same element family.
+
+| AAH sensor pin | Function                  | → 7A ECU pin |
+|----------------|---------------------------|--------------|
+| 1              | MAF signal output → ECU   | 1            |
+| 2              | Ground                    | 2            |
+| 3              | +12V supply               | 3            |
+| —              | (no pin 4)                | 4 → apply CO pot ROM patch, leave open |
+
+No CO pot is present. Apply the **CO Pot disable patch** in HachiROM to
+suppress fault 00521 and leave ECU pin 4 unconnected.
+
+> **Part number note:**  
+> `078 133 471` (no suffix) — correct  
+> `078 133 471 A` / `078 133 471 AX` — **not this sensor**, different connector/housing revision
+
+---
+
+
 
 > **Warning:** The MAF axis values for both 1.8T profiles are derived from
 > transfer function data and bore area calculations.  They have not been
