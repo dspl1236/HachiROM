@@ -140,28 +140,58 @@ class ROMVariant:
 
 # ---------------------------------------------------------------------------
 # 266D — Late 7A ECU
+# Confirmed from: 034 Motorsport decompile, address gap analysis, 266B comparison
 # ---------------------------------------------------------------------------
 
 _MAPS_266D = [
-    MapDef("Primary Fueling",    0x0000, 16, 16,
+    # ── Primary tuning maps ──────────────────────────────────────────────────
+    MapDef("Primary Fueling",       0x0000, 16, 16,
            "Fuel map (RPM×Load). signed(byte)+128, stock 40-123.", "fuel units",
            rpm_axis=RPM_AXIS_266D, load_axis=LOAD_AXIS,
            decode=fuel_266d_decode, encode=fuel_266d_encode),
-    MapDef("Primary Timing",     0x0100, 16, 16,
-           "Ignition advance. Raw byte, >128=retard.", "deg BTDC",
+    MapDef("Primary Timing",        0x0100, 16, 16,
+           "Ignition advance. Raw byte >128 = retard (2s complement).", "deg BTDC",
            rpm_axis=TIMING_RPM_AXIS, load_axis=LOAD_AXIS,
            decode=timing_decode, encode=timing_encode),
-    MapDef("Timing Knock Safety",0x1000, 16, 16,
-           "Knock fallback timing map.", "deg BTDC",
+    MapDef("Timing Knock Safety",   0x1000, 16, 16,
+           "Fallback timing map under knock. Same axes as primary timing.", "deg BTDC",
            rpm_axis=TIMING_RPM_AXIS, load_axis=LOAD_AXIS,
            decode=timing_decode, encode=timing_encode),
-    MapDef("RPM Axis (Fuel)",    0x0250,  1, 16, "Fuel RPM axis. raw*25=RPM.", "RPM"),
-    MapDef("Load Axis",          0x0260,  1, 16, "Load axis. raw*0.3922=kPa.", "kPa"),
-    MapDef("RPM Axis (Timing)",  0x0270,  1, 16, "Timing RPM axis. raw*25=RPM.", "RPM"),
-    MapDef("Load Axis (Timing)", 0x0280,  1, 16, "Timing load axis.", "kPa"),
-    MapDef("CL Load Threshold",  0x0660,  1, 16, "CL disable load threshold per RPM.", "kPa"),
-    MapDef("CL RPM Limit",       0x07E1,  1,  1, "Disable CL above RPM. raw*25=RPM.", "RPM"),
-    MapDef("Decel Cutoff",       0x0E30,  1, 16, "Injector decel cutoff per RPM.", "kPa"),
+
+    # ── Axis tables ──────────────────────────────────────────────────────────
+    MapDef("RPM Axis (Fuel)",       0x0250,  1, 16, "Fuel map RPM breakpoints. raw×25=RPM.", "RPM"),
+    MapDef("Load Axis (Fuel)",      0x0260,  1, 16, "Fuel map load breakpoints. raw×0.3922=kPa.", "kPa"),
+    MapDef("RPM Axis (Timing)",     0x0270,  1, 16, "Timing map RPM breakpoints. raw×25=RPM.", "RPM"),
+    MapDef("Load Axis (Timing)",    0x0280,  1, 16, "Timing map load breakpoints. raw×0.3922=kPa.", "kPa"),
+
+    # ── Warmup / cold start ──────────────────────────────────────────────────
+    MapDef("After-start Enrichment",0x0220,  1, 16,
+           "Cold-start fuel enrichment taper. Decreases as engine warms. "
+           "Coolant-temp indexed (same axis as idle target).", "fuel units"),
+    MapDef("Idle Speed Target",     0x0290,  1, 16,
+           "Target idle RPM vs coolant temp. raw×25=RPM. "
+           "Cold: ~2000RPM, warm: ~800RPM.", "RPM"),
+    MapDef("Idle Ignition Trim",    0x02A0,  1, 16,
+           "Timing correction at idle vs coolant temp. Signed byte (deg). "
+           "Advances when warm, retards cold to aid warm-up.", "deg"),
+
+    # ── Accel enrichment ─────────────────────────────────────────────────────
+    MapDef("Accel Enrichment",      0x0400,  1, 16,
+           "TPS accel enrichment pulse vs RPM. Decreases at high RPM. "
+           "Shared RPM axis with fuel map.", "fuel units"),
+    MapDef("Accel Decay",           0x0430,  1, 16,
+           "Accel enrichment decay rate vs RPM. Exponential taper 100→2. "
+           "Higher = faster decay.", "raw"),
+
+    # ── Closed loop / O2 ────────────────────────────────────────────────────
+    MapDef("CL Load Threshold",     0x0660,  1, 16,
+           "Load above which closed loop is disabled, per RPM. raw×0.3922=kPa.", "kPa"),
+    MapDef("CL RPM Limit",          0x07E1,  1,  1,
+           "Disable closed loop above this RPM. raw×25=RPM.", "RPM"),
+
+    # ── Fuel cut / decel ────────────────────────────────────────────────────
+    MapDef("Decel Cutoff",          0x0E30,  1, 16,
+           "Injector decel fuel cut threshold per RPM. raw×0.3922=kPa.", "kPa"),
 ]
 
 ROM_266D = ROMVariant(
@@ -177,27 +207,59 @@ ROM_266D = ROMVariant(
 
 # ---------------------------------------------------------------------------
 # 266B — Early 7A ECU
+# Same map layout as 266D except: lambda fuel formula, MAF linearisation,
+# no injection scaler at 0x077E (different connector, different hardware)
 # ---------------------------------------------------------------------------
 
 _MAPS_266B = [
-    MapDef("Fueling Map",       0x0000, 16, 16,
-           "Fuel map (Lambda). signed(byte)*0.007813+1.0, stock 0.625-0.867.", "lambda",
+    # ── Primary tuning maps ──────────────────────────────────────────────────
+    MapDef("Primary Fueling",       0x0000, 16, 16,
+           "Fuel map (Lambda). signed(byte)×0.007813+1.0, stock 0.625-0.867.", "lambda",
            rpm_axis=RPM_AXIS_266B, load_axis=LOAD_AXIS,
            decode=fuel_lambda_decode, encode=fuel_lambda_encode),
-    MapDef("Timing Map",        0x0100, 16, 16,
-           "Ignition advance (deg BTDC).", "deg BTDC",
+    MapDef("Primary Timing",        0x0100, 16, 16,
+           "Ignition advance (deg BTDC). Raw byte >128 = retard.", "deg BTDC",
            rpm_axis=TIMING_RPM_AXIS, load_axis=LOAD_AXIS,
            decode=timing_decode, encode=timing_encode),
-    MapDef("Timing Map Knock",  0x1000, 16, 16,
-           "Knock fallback timing map.", "deg BTDC",
+    MapDef("Timing Knock Safety",   0x1000, 16, 16,
+           "Fallback timing map under knock.", "deg BTDC",
            rpm_axis=TIMING_RPM_AXIS, load_axis=LOAD_AXIS,
            decode=timing_decode, encode=timing_encode),
-    MapDef("MAF Linearization", 0x02D0,  1, 64,
-           "MAF linearization — 64x16-bit big-endian values.", "raw"),
-    MapDef("Injection Scaler",  0x077E,  1,  1, "Global injector scaler.", "raw"),
-    MapDef("CL Disable RPM",    0x07E1,  1,  1, "Disable CL above RPM.", "RPM"),
-    MapDef("Decel Cutoff",      0x0E30,  1, 16, "Decel cutoff per RPM.", "kPa"),
-    MapDef("CL Load Limit",     0x0660,  1, 16, "CL disable load limit per RPM.", "kPa"),
+
+    # ── Axis tables ──────────────────────────────────────────────────────────
+    MapDef("RPM Axis (Fuel)",       0x0250,  1, 16, "Fuel map RPM breakpoints. raw×25=RPM.", "RPM"),
+    MapDef("Load Axis (Fuel)",      0x0260,  1, 16, "Fuel map load breakpoints. raw×0.3922=kPa.", "kPa"),
+    MapDef("RPM Axis (Timing)",     0x0270,  1, 16, "Timing map RPM breakpoints. raw×25=RPM.", "RPM"),
+    MapDef("Load Axis (Timing)",    0x0280,  1, 16, "Timing map load breakpoints. raw×0.3922=kPa.", "kPa"),
+
+    # ── Warmup / cold start ──────────────────────────────────────────────────
+    MapDef("After-start Enrichment",0x0220,  1, 16,
+           "Cold-start enrichment taper vs coolant temp. Decoded as lambda offset.", "lambda"),
+    MapDef("Idle Speed Target",     0x0290,  1, 16,
+           "Target idle RPM vs coolant temp. raw×25=RPM.", "RPM"),
+    MapDef("Idle Ignition Trim",    0x02A0,  1, 16,
+           "Idle timing correction vs coolant temp. Signed byte (deg).", "deg"),
+
+    # ── MAF (266B only — 266D uses MAP sensor only) ──────────────────────────
+    MapDef("MAF Linearization",     0x02D0,  1, 64,
+           "MAF sensor linearisation table. 64×16-bit big-endian values. "
+           "266B only — not present on 266D (MAP-only).", "raw"),
+
+    # ── Accel enrichment ─────────────────────────────────────────────────────
+    MapDef("Accel Enrichment",      0x0400,  1, 16,
+           "TPS accel enrichment pulse vs RPM.", "lambda"),
+    MapDef("Accel Decay",           0x0430,  1, 16,
+           "Accel enrichment decay rate vs RPM. Higher = faster.", "raw"),
+
+    # ── Closed loop / O2 ─────────────────────────────────────────────────────
+    MapDef("CL Load Threshold",     0x0660,  1, 16,
+           "Load above which closed loop disabled, per RPM. raw×0.3922=kPa.", "kPa"),
+    MapDef("Injection Scaler",      0x077E,  1,  1, "Global injector scaler.", "raw"),
+    MapDef("CL RPM Limit",          0x07E1,  1,  1, "Disable CL above this RPM. raw×25=RPM.", "RPM"),
+
+    # ── Fuel cut / decel ─────────────────────────────────────────────────────
+    MapDef("Decel Cutoff",          0x0E30,  1, 16,
+           "Decel fuel cut threshold per RPM. raw×0.3922=kPa.", "kPa"),
 ]
 
 ROM_266B = ROMVariant(
@@ -213,24 +275,72 @@ ROM_266B = ROMVariant(
 
 # ---------------------------------------------------------------------------
 # AAH — 2.8L V6 12v
+# Extra maps confirmed from ROM hex analysis of AAH_MMS100_4A0906266 stock ROM.
+# Notes:
+#   0x0670-0x06CF: lambda-decoded values 1.0-1.5 — likely OL enrichment
+#                  correction or per-bank injection timing. NOT a standard CL
+#                  lambda target (those would cluster near 1.0). Marked
+#                  uncertain — do not tune without further verification.
+#   0x1001-0x10FF: structured 0-32 value table after knock map — possibly
+#                  per-bank knock threshold (V6 has 2 knock sensors / 2 banks).
+#                  Marked read-only until confirmed.
 # ---------------------------------------------------------------------------
 
 _MAPS_AAH = [
-    MapDef("Fueling Map",       0x0000, 16, 16,
-           "Fuel map (Lambda). signed(byte)*0.007813+1.0.", "lambda",
+    # ── Primary tuning maps ──────────────────────────────────────────────────
+    MapDef("Primary Fueling",       0x0000, 16, 16,
+           "Fuel map (Lambda). signed(byte)×0.007813+1.0.", "lambda",
            rpm_axis=RPM_AXIS_AAH, load_axis=LOAD_AXIS_AAH,
            decode=fuel_lambda_decode, encode=fuel_lambda_encode),
-    MapDef("Timing Map",        0x0100, 16, 16,
-           "Ignition advance (deg BTDC).", "deg BTDC",
+    MapDef("Primary Timing",        0x0100, 16, 16,
+           "Ignition advance (deg BTDC). Raw byte >128 = retard.", "deg BTDC",
            rpm_axis=RPM_AXIS_AAH, load_axis=LOAD_AXIS_AAH,
            decode=timing_decode, encode=timing_encode),
-    MapDef("Timing Map Knock",  0x1000, 16, 16,
+    MapDef("Timing Knock Safety",   0x1000, 16, 16,
            "Knock fallback timing map.", "deg BTDC",
            rpm_axis=RPM_AXIS_AAH, load_axis=LOAD_AXIS_AAH,
            decode=timing_decode, encode=timing_encode),
-    MapDef("Injection Scaler",  0x077E,  1,  1, "Global injector scaler (stock=100).", "raw"),
-    MapDef("CL Disable RPM",    0x07E1,  1,  1, "Disable CL above RPM.", "RPM"),
-    MapDef("Decel Cutoff",      0x0E30,  1, 16, "Decel cutoff per RPM.", "kPa"),
+
+    # ── Axis tables (confirmed from ROM data — match RPM_AXIS_AAH exactly) ───
+    MapDef("RPM Axis (Fuel)",       0x0250,  1, 16,
+           "Fuel map RPM breakpoints. raw×25=RPM.", "RPM"),
+    MapDef("Load Axis (Fuel)",      0x0260,  1, 16,
+           "Fuel map load breakpoints. raw×0.3922=kPa.", "kPa"),
+    MapDef("RPM Axis (Timing)",     0x0270,  1, 16,
+           "Timing map RPM breakpoints. raw×25=RPM. Starts at 600 (not 500).", "RPM"),
+    MapDef("Load Axis (Timing)",    0x0280,  1, 16,
+           "Timing map load breakpoints. raw×0.3922=kPa.", "kPa"),
+
+    # ── Warmup / cold start (confirmed from ROM hex analysis) ────────────────
+    MapDef("After-start Enrichment",0x0220,  1, 16,
+           "Cold-start enrichment taper. Decoded: 64→32 = lambda 1.5→1.25. "
+           "Coolant-temp indexed. Reduces as engine warms.", "lambda",
+           decode=fuel_lambda_decode, encode=fuel_lambda_encode),
+    MapDef("Idle Speed Target",     0x0290,  1, 16,
+           "Target idle RPM vs coolant temp. raw×25=RPM. "
+           "Stock: cold=2000RPM, warm=800RPM.", "RPM"),
+    MapDef("Idle Ignition Trim",    0x02A0,  1, 16,
+           "Idle timing trim vs coolant temp. Signed byte (deg BTDC). "
+           "Stock: +7→-9deg (advances warm, retards cold).", "deg",
+           decode=timing_decode, encode=timing_encode),
+
+    # ── Accel enrichment (confirmed from ROM hex analysis) ───────────────────
+    MapDef("Accel Enrichment",      0x0400,  1, 16,
+           "TPS accel enrichment pulse vs RPM. Stock: 104→48 (less at high RPM). "
+           "Shared RPM axis with fuel map.", "raw"),
+    MapDef("Accel Decay",           0x0430,  1, 16,
+           "Accel enrichment decay rate vs RPM. Stock: 100→2 (exponential). "
+           "Higher value = faster decay.", "raw"),
+
+    # ── Scalars ──────────────────────────────────────────────────────────────
+    MapDef("Injection Scaler",      0x077E,  1,  1,
+           "Global injector scaler. Stock=100. Raise for larger injectors.", "raw"),
+    MapDef("CL Disable RPM",        0x07E1,  1,  1,
+           "Disable closed loop above this RPM. raw×25=RPM.", "RPM"),
+
+    # ── Fuel cut / decel ─────────────────────────────────────────────────────
+    MapDef("Decel Cutoff",          0x0E30,  1, 16,
+           "Decel fuel cut threshold per RPM. raw×0.3922=kPa.", "kPa"),
 ]
 
 ROM_AAH = ROMVariant(
@@ -260,3 +370,4 @@ _RESET_VEC_MAP: dict[tuple, ROMVariant] = {
     (0xD7, 0xBC): ROM_266B,
     (0xEF, 0x18): ROM_AAH,
 }
+
