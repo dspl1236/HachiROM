@@ -791,15 +791,47 @@ _MAP_TIPS: dict[str, dict] = {
         ],
         "caution": None,
     },
-    "CL Load Threshold": {
-        "what":  "The MAP sensor load level above which closed-loop lambda "
-                 "control is disabled, per RPM column. Below this load the "
-                 "ECU uses the O2 sensor to trim fuelling.",
+    "CL RPM Limit": {
+        "what":  "7A ECUs (266B/D) only. The RPM threshold above which the ECU "
+                 "disables closed-loop O2 correction. Works together with "
+                 "CL Load Threshold: the ECU goes open-loop if EITHER this RPM "
+                 "is exceeded OR the load falls below the per-RPM load threshold. "
+                 "Raw × 25 = RPM.",
         "tips": [
-            "Lower values = closed loop active over a wider load range.",
-            "At WOT the ECU should always be open loop (fuel map only).",
-            "On a modified engine, running CL at cruise is generally fine "
-            "but disable it at moderate+ load.",
+            "Stock 7A: raw=244 → 6100 RPM. At this RPM the engine is near "
+            "redline — closed-loop is active across almost the full rev range "
+            "at cruise and part-throttle.",
+            "On a tuned 7A with a remapped fuel map, lower this to 3000–4000 RPM "
+            "(raw 120–160) so the ECU follows the fuel map precisely under power. "
+            "Pair with CL Load Threshold for full control of the CL boundary.",
+            "The CL Load Threshold table handles the load axis — the ECU goes "
+            "open-loop if load drops below that table's value for the current "
+            "RPM column, regardless of this RPM limit.",
+            "CL correction is limited to a few percent trim. It cannot "
+            "compensate for a significantly wrong fuel map — fix the map first.",
+            "If the car hunts at idle, check idle fuel map cells before "
+            "lowering this — the O2 sensor may be masking a lean idle map.",
+        ],
+        "caution": "Disabling CL at low RPM / light load on an otherwise "
+                   "stock engine removes the O2 feedback that corrects for "
+                   "injector wear and fuel sensor drift. Only lower this "
+                   "once the fuel map is properly tuned.",
+    },
+    "CL Load Threshold": {
+        "what":  "7A ECUs (266B/D) only. A 16-column table giving the MAP sensor "
+                 "load level per RPM column below which closed-loop O2 correction "
+                 "is active. Above this load the ECU follows the fuel map exactly. "
+                 "Works together with CL RPM Limit — the ECU goes open-loop when "
+                 "EITHER condition is met.",
+        "tips": [
+            "Lower threshold values = CL active over a wider load range at "
+            "that RPM column.",
+            "At WOT columns, set a high threshold so the ECU is always "
+            "open-loop at full load — the fuel map should be followed exactly.",
+            "On a modified engine, CL at light cruise is fine, but raise "
+            "mid-load column thresholds so the fuel map is trusted under power.",
+            "Edit this table together with CL RPM Limit for full control "
+            "over when the ECU switches between open- and closed-loop.",
         ],
         "caution": None,
     },
@@ -868,8 +900,11 @@ _MAP_TIPS: dict[str, dict] = {
                  "per map unit as before. Stock 7A/AAH = 100 (stock injectors). "
                  "Formula: new_scaler = 100 × (stock_cc / new_injector_cc).",
         "tips": [
-            "Stock 7A and AAH injectors are ~205 cc/min.  Example: fitting "
-            "410 cc/min injectors → set scaler to 50.",
+            "Stock 7A (266B) and AAH injectors are ~205 cc/min. "
+            "Example: fitting 410 cc/min injectors → set scaler to 50.",
+            "266D (893 906 266 D) does not have an Injection Scaler byte — "
+            "the injector pulse is fixed in the ECU firmware on that variant. "
+            "Use the fuel map cells to adjust fuelling on a 266D.",
             "The MMS Stage 1 AAH tune uses scaler=50 with the fuel map values "
             "approximately doubled — this is a resolution trick, not a sign "
             "of bigger injectors. Halving the scaler and doubling the map gives "
@@ -886,7 +921,8 @@ _MAP_TIPS: dict[str, dict] = {
         "caution": "Changing the scaler without rescaling the fuel map will "
                    "cause severe over- or under-fuelling across the entire "
                    "rev range. If in doubt, leave it at stock (100) and tune "
-                   "using the fuel map only.",
+                   "using the fuel map only.  "
+                   "Note: 266D does not expose this byte — tune via fuel map.",
     },
     "MAF Linearization": {
         "what":  "266B only. Lookup table that converts raw MAF sensor counts "
