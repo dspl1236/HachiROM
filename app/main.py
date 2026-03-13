@@ -209,6 +209,8 @@ class MapTab(QWidget):
     Green border on cells where _local != _baseline via ChangedCellDelegate.
     """
 
+    rom_changed = pyqtSignal()   # emitted after every successful cell edit
+
     def __init__(self, map_def, rom_snapshot: bytes, parent=None):
         super().__init__(parent)
         self.map_def  = map_def
@@ -328,6 +330,7 @@ class MapTab(QWidget):
 
         self._local[r][c] = raw
         changed = raw != self._baseline[r][c]
+        self.rom_changed.emit()
 
         # Recolour entire table (heat range may have shifted)
         all_raw = [self._local[rr][cc]
@@ -1138,36 +1141,104 @@ class ROMInfoWidget(QWidget):
 # ---------------------------------------------------------------------------
 
 class HexViewTab(QWidget):
-    """Simple read-only hex dump. Shows all 32KB so you can at least inspect
-    and save any ROM even if the variant is unrecognised."""
+    """Live hex view of the assembled working ROM.
+
+    Always present as the last tab (for both recognised and unknown ROMs).
+    Shows the result of _build_rom() — snapshot + all current edits +
+    checksum correction — so what you see is exactly what will be saved.
+
+    For unrecognised ROMs, falls back to showing the raw snapshot.
+    Refreshed lazily: only when the tab is activated, or when refresh()
+    is called after an edit.
+
+    Raw hex editing is intentionally not implemented here — edits belong
+    in the map tabs where context (axis labels, units, colour scale) makes
+    them safe. The hex view is read-only diagnostic output.
+    """
 
     BYTES_PER_ROW = 16
 
-    def __init__(self, data: bytes, parent=None):
+    def __init__(self, get_rom_bytes, unrecognised: bool = False, parent=None):
+        """
+        get_rom_bytes : callable() -> bytearray | bytes
+            Called each time the view needs to refresh. Typically
+            MainWindow._build_rom for recognised ROMs, or a lambda returning
+            _rom_snapshot for unrecognised ones.
+        unrecognised  : if True, show the "variant not recognised" warning.
+        """
         super().__init__(parent)
+        self._get_rom_bytes  = get_rom_bytes
+        self._dirty          = True   # needs a render on next activation
+        self._last_hash      = None   # avoid redundant re-renders
+
         layout = QVBoxLayout(self)
         layout.setContentsMargins(6, 6, 6, 6)
-        note = QLabel(
-            "⚠  ROM variant not recognised — showing raw hex dump.  "
-            "You can still save this file using Save .bin… or Save 27C512 .bin…")
-        note.setStyleSheet("color:#ff9900; font-size:11px; padding:4px 0;")
-        note.setWordWrap(True)
-        layout.addWidget(note)
+        layout.setSpacing(4)
+
+        # ── header bar ────────────────────────────────────────────────────
+        hdr = QHBoxLayout()
+        self._lbl_info = QLabel("32 KB  ·  0x0000 – 0x7FFF  ·  read-only view of working ROM")
+        self._lbl_info.setStyleSheet("color:#666; font-size:10px;")
+        hdr.addWidget(self._lbl_info)
+        hdr.addStretch()
+        btn_refresh = QPushButton("↺ Refresh")
+        btn_refresh.setFixedWidth(80)
+        btn_refresh.setStyleSheet(
+            "QPushButton { background:#2a2a2a; color:#888; border:1px solid #333; "
+            "border-radius:3px; padding:2px 8px; font-size:11px; }"
+            "QPushButton:hover { color:#ccc; border-color:#555; }")
+        btn_refresh.clicked.connect(self.refresh)
+        hdr.addWidget(btn_refresh)
+        layout.addLayout(hdr)
+
+        if unrecognised:
+            warn = QLabel(
+                "⚠  ROM variant not recognised — showing raw snapshot.  "
+                "You can still save this file using Save .bin… or Save 27C512 .bin…")
+            warn.setStyleSheet("color:#ff9900; font-size:11px; padding:2px 0 4px 0;")
+            warn.setWordWrap(True)
+            layout.addWidget(warn)
+
+        # ── hex view ──────────────────────────────────────────────────────
         self.view = QTextEdit()
         self.view.setReadOnly(True)
         self.view.setFont(QFont("Consolas", 9))
+        self.view.setStyleSheet(
+            "background:#111; color:#ccc; border:1px solid #2a2a2a;")
         layout.addWidget(self.view)
-        self._load(data)
 
-    def _load(self, data: bytes):
-        lines = []
+    def refresh(self):
+        """Re-render from get_rom_bytes(). Called on tab activation or after edits."""
+        self._dirty = False   # clear regardless — we're refreshing now
+        data = bytes(self._get_rom_bytes())[:32768]
+        h    = hash(data)
+        if h == self._last_hash:
+            return   # nothing changed, skip expensive re-render
+        self._last_hash = h
+
         bpr   = self.BYTES_PER_ROW
-        for i in range(0, min(len(data), 32768), bpr):
+        lines = [
+            f"{'ADDR':<6}  {'00 01 02 03 04 05 06 07  08 09 0A 0B 0C 0D 0E 0F':<50}  ASCII"
+        ]
+        lines.append("─" * 70)
+        for i in range(0, len(data), bpr):
             chunk = data[i:i + bpr]
-            hex_s = " ".join(f"{b:02X}" for b in chunk)
-            asc_s = "".join(chr(b) if 32 <= b < 127 else "." for b in chunk)
-            lines.append(f"{i:04X}:  {hex_s:<{bpr*3}}  {asc_s}")
+            # split into two groups of 8 with extra space between them
+            h1 = " ".join(f"{b:02X}" for b in chunk[:8])
+            h2 = " ".join(f"{b:02X}" for b in chunk[8:])
+            hex_s = f"{h1:<23}  {h2:<23}"
+            asc_s = "".join(chr(b) if 32 <= b < 127 else "·" for b in chunk)
+            lines.append(f"{i:04X}:  {hex_s}  {asc_s}")
+
         self.view.setPlainText("\n".join(lines))
+        sz = len(data)
+        self._lbl_info.setText(
+            f"{sz:,} bytes ({sz//1024} KB)  ·  0x0000 – 0x{sz-1:04X}  ·  "
+            f"read-only · shows assembled working ROM (edits + checksum)")
+
+    def mark_dirty(self):
+        """Signal that the underlying ROM has changed; refresh on next activation."""
+        self._dirty = True
 
 
 # ---------------------------------------------------------------------------
@@ -1184,6 +1255,7 @@ class MainWindow(QMainWindow):
         self._rom_snapshot:   bytes = b""   # original ROM bytes at open time — never mutated
         self._map_tabs:       list[MapTab] = []
         self._overview_tab:  OverviewTab | None = None
+        self._hex_tab:       HexViewTab | None = None
         self._compare_tab_idx: int = -1
         self._build_menu()
         self._build_ui()
@@ -1246,6 +1318,7 @@ class MainWindow(QMainWindow):
         splitter = QSplitter(Qt.Horizontal)
         self.tabs = QTabWidget()
         self.tabs.currentChanged.connect(self._on_tab_changed)
+        self.tabs.currentChanged.connect(self._maybe_refresh_hex)
         splitter.addWidget(self.tabs)
 
         # Right sidebar: map context panel (top) + ROM info (bottom)
@@ -1287,6 +1360,17 @@ class MainWindow(QMainWindow):
     # ── ROM open ──────────────────────────────────────────────────────────────
 
     # -- Tab change -> update map info panel ------------------------------------
+
+    def _on_rom_changed(self):
+        """Called whenever any map tab or overview field commits an edit.
+        Marks the hex tab dirty so it refreshes on next activation."""
+        if self._hex_tab:
+            self._hex_tab.mark_dirty()
+
+    def _maybe_refresh_hex(self, index: int):
+        """Refresh the hex tab when the user switches to it."""
+        if self._hex_tab and self.tabs.widget(index) is self._hex_tab:
+            self._hex_tab.refresh()
 
     def _on_tab_changed(self, index: int):
         if index < 0:
@@ -1353,10 +1437,13 @@ class MainWindow(QMainWindow):
             self.tabs.removeTab(0)
         self._map_tabs = []
         self._overview_tab = None
+        self._hex_tab = None
 
         if result.variant:
             # Overview tab — always first
             self._overview_tab = OverviewTab(result.variant, self._rom_snapshot)
+            for field in self._overview_tab._fields:
+                field.changed.connect(self._on_rom_changed)
             self.tabs.insertTab(0, self._overview_tab, "Overview")
 
             editable = [m for m in result.variant.maps
@@ -1365,15 +1452,20 @@ class MainWindow(QMainWindow):
                             and not m.name.lower().startswith("load"))]
             for m in editable:
                 tab = MapTab(m, self._rom_snapshot)
+                tab.rom_changed.connect(self._on_rom_changed)
                 self._map_tabs.append(tab)
                 self.tabs.addTab(tab, m.name)
         else:
             self._overview_tab = None
-            hex_tab = HexViewTab(self._rom_snapshot)
-            self.tabs.addTab(hex_tab, "Hex Dump")
 
         self.compare_tab = CompareTab()
         self._compare_tab_idx = self.tabs.addTab(self.compare_tab, "⊕ Compare")
+
+        # Hex tab — always last, shows assembled working ROM (edits + checksum)
+        self._hex_tab = HexViewTab(
+            self._build_rom if result.variant else (lambda: self._rom_snapshot),
+            unrecognised=not bool(result.variant))
+        self.tabs.addTab(self._hex_tab, "⬡ Hex")
 
         self.info_panel.update_rom(self._rom_snapshot)
         self.statusBar().showMessage(
