@@ -192,10 +192,16 @@ class MapTab(QWidget):
     """
     Editable heatmap for one ROM map.
 
-    _baseline[r][c]  — raw byte when ROM was opened (never changes)
-    _local[r][c]     — current edited value (written to ROM on flush)
+    Architecture:
+      _baseline[r][c]  — raw byte snapshot at open time, never mutated
+      _local[r][c]     — working copy; edits land here
 
-    Green border drawn on any cell where _local != _baseline.
+    Editing uses delegate.commitData signal (fires exactly once when the
+    user confirms a cell edit via Enter/Tab/click-away). This avoids the
+    itemChanged re-entrancy bug where blockSignals on QTableWidget does not
+    suppress signals fired via QAbstractItemModel.dataChanged.
+
+    Green border on cells where _local != _baseline via ChangedCellDelegate.
     """
 
     def __init__(self, map_def, rom_data: bytearray, parent=None):
@@ -211,15 +217,10 @@ class MapTab(QWidget):
             off = addr + r * cols + c
             return rom_data[off] if off < len(rom_data) else 0
 
-        # Baseline = snapshot of ROM bytes at open time
         self._baseline = [[_read(r, c) for c in range(cols)] for r in range(rows)]
-        # Local copy — edits land here
         self._local    = [[_read(r, c) for c in range(cols)] for r in range(rows)]
-        self._updating = False   # guard against re-entrant itemChanged
 
         self._build_ui()
-
-    # ── UI ───────────────────────────────────────────────────────────────────
 
     def _build_ui(self):
         layout = QVBoxLayout(self)
@@ -228,14 +229,14 @@ class MapTab(QWidget):
         info = QLabel(
             f"<b>{self.map_def.name}</b>  ·  "
             f"Addr: <code>0x{self.map_def.address:04X}</code>  ·  "
-            f"{self.map_def.rows}×{self.map_def.cols}  ·  "
-            f"{self.map_def.unit or ''}  —  {self.map_def.description}"
+            f"{self.map_def.rows}\u00d7{self.map_def.cols}  ·  "
+            f"{self.map_def.unit or ''}  \u2014  {self.map_def.description}"
         )
         info.setWordWrap(True)
         info.setStyleSheet("color:#aaa; font-size:11px; padding:2px 0;")
         hint = QLabel(
-            "Double-click to edit  ·  Enter/Tab to confirm  ·  Esc to cancel  ·  "
-            "<span style='color:#2dff6e'>■</span> = changed from disk")
+            "Double-click to edit  \u00b7  Enter/Tab to confirm  \u00b7  Esc to cancel  \u00b7  "
+            "<span style='color:#2dff6e'>\u25a0</span> = changed from disk")
         hint.setTextFormat(Qt.RichText)
         hint.setStyleSheet("color:#555; font-size:10px;")
         hdr = QHBoxLayout()
@@ -248,8 +249,7 @@ class MapTab(QWidget):
         self.table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
         self.table.verticalHeader().setSectionResizeMode(QHeaderView.Stretch)
         self.table.setFont(QFont("Consolas", 9))
-        self.table.setEditTriggers(
-            QTableWidget.DoubleClicked | QTableWidget.SelectedClicked)
+        self.table.setEditTriggers(QTableWidget.DoubleClicked)
         self.table.setSelectionMode(QTableWidget.SingleSelection)
         self.table.setItemDelegate(ChangedCellDelegate(self.table))
         layout.addWidget(self.table)
@@ -262,9 +262,10 @@ class MapTab(QWidget):
                 [str(v) for v in self.map_def.load_axis[:cols]])
 
         self._populate_table()
-        self.table.itemChanged.connect(self._on_cell_changed)
 
-    # ── Encode / decode ───────────────────────────────────────────────────────
+        # commitData fires exactly once when user confirms edit — no re-entry,
+        # no blockSignals needed, works correctly on every tab.
+        self.table.itemDelegate().commitData.connect(self._on_commit)
 
     def _decode(self, raw: int) -> str:
         if self.map_def.decode:
@@ -272,7 +273,7 @@ class MapTab(QWidget):
             return f"{v:.3f}" if isinstance(v, float) else str(v)
         return str(raw)
 
-    def _encode(self, text: str) -> int | None:
+    def _encode(self, text: str):
         try:
             if self.map_def.encode:
                 return max(0, min(255, int(round(self.map_def.encode(float(text))))))
@@ -283,15 +284,10 @@ class MapTab(QWidget):
         except (ValueError, TypeError):
             return None
 
-    # ── Table population ──────────────────────────────────────────────────────
-
     def _populate_table(self):
-        self._updating = True
-        self.table.blockSignals(True)
         rows, cols = self.map_def.rows, self.map_def.cols
         all_raw = [self._local[r][c] for r in range(rows) for c in range(cols)]
         vmin, vmax = min(all_raw), max(all_raw)
-
         for r in range(rows):
             for c in range(cols):
                 raw     = self._local[r][c]
@@ -303,45 +299,45 @@ class MapTab(QWidget):
                 _colour_item(item, colour, changed)
                 if self._is_timing:
                     signed = raw if raw < 128 else raw - 256
-                    item.setToolTip(f"raw={raw}  →  {signed:+d}° BTDC")
+                    item.setToolTip(f"raw={raw}  \u2192  {signed:+d}\u00b0 BTDC")
                 self.table.setItem(r, c, item)
-        self.table.blockSignals(False)
-        self._updating = False
 
-    # ── Cell edit ─────────────────────────────────────────────────────────────
-
-    def _on_cell_changed(self, item: QTableWidgetItem):
-        if self._updating:
+    def _on_commit(self, editor):
+        """Called by the delegate exactly once when user confirms a cell edit."""
+        idx  = self.table.currentIndex()
+        r, c = idx.row(), idx.column()
+        if r < 0 or c < 0:
             return
-        r, c = item.row(), item.column()
-        raw  = self._encode(item.text())
+        text = editor.text()
+        raw  = self._encode(text)
 
         if raw is None:
-            # Bad input — revert
-            self.table.blockSignals(True)
-            item.setText(self._decode(self._local[r][c]))
-            self.table.blockSignals(False)
+            # Bad input — restore displayed value from _local
+            self.table.item(r, c).setText(self._decode(self._local[r][c]))
             return
 
         self._local[r][c] = raw
         changed = raw != self._baseline[r][c]
 
-        # Recolour and mark changed border
-        self._updating = True
-        self.table.blockSignals(True)
+        # Recolour entire table (heat range may have shifted)
         all_raw = [self._local[rr][cc]
                    for rr in range(self.map_def.rows)
                    for cc in range(self.map_def.cols)]
-        colour = (timing_colour(raw) if self._is_timing
-                  else heat_colour(raw, min(all_raw), max(all_raw)))
-        _colour_item(item, colour, changed)
-        if self._is_timing:
-            signed = raw if raw < 128 else raw - 256
-            item.setToolTip(f"raw={raw}  →  {signed:+d}° BTDC")
-        self.table.blockSignals(False)
-        self._updating = False
+        vmin, vmax = min(all_raw), max(all_raw)
 
-    # ── Flush ─────────────────────────────────────────────────────────────────
+        for rr in range(self.map_def.rows):
+            for cc in range(self.map_def.cols):
+                item = self.table.item(rr, cc)
+                if item is None:
+                    continue
+                v = self._local[rr][cc]
+                ch = v != self._baseline[rr][cc]
+                col = (timing_colour(v) if self._is_timing
+                       else heat_colour(v, vmin, vmax))
+                _colour_item(item, col, ch)
+                if self._is_timing:
+                    s = v if v < 128 else v - 256
+                    item.setToolTip(f"raw={v}  \u2192  {s:+d}\u00b0 BTDC")
 
     def flush_to_rom(self):
         """Write _local into the shared rom_data bytearray."""
@@ -397,7 +393,7 @@ class CompareTab(QWidget):
         self.result.setReadOnly(True)
         self.result.setFont(QFont("Consolas", 9))
         self.result.setPlaceholderText(
-            "Load two ROMs and click Compare  —  or use Commit in the toolbar.")
+            "Load two ROMs and click Compare.")
         layout.addWidget(self.result)
 
     def load_pair(self, data_a: bytes, label_a: str,
@@ -493,7 +489,7 @@ _MAP_TIPS: dict[str, dict] = {
             "Work across the load axis first — wide-open throttle is the "
             "bottom rows, idle is the top.",
             "Fix idle and cruise before touching WOT cells.",
-            "After any change, commit and verify the checksum before saving.",
+            "After any change, the checksum is corrected automatically on save.",
         ],
         "caution": "Lean WOT cells cause knock and piston damage. Always run "
                    "richer than stoichiometric under high load.",
@@ -696,7 +692,7 @@ _WELCOME_PANEL = {
     "tips": [
         "Double-click any cell in a map tab to edit it.",
         "Changed cells get a green border so you can track what moved.",
-        "Use Commit to flush edits and refresh the checksum.",
+        "Save .bin flushes all edits and corrects the checksum automatically.",
         "Save .bin for the Teensy SD card. Save 27C512 for EPROM programmers.",
     ],
     "caution": None,
@@ -974,17 +970,6 @@ class MainWindow(QMainWindow):
         btn_open = QPushButton("Open ROM…")
         btn_open.clicked.connect(self.open_rom)
 
-        self.btn_commit = QPushButton("⬤  Commit")
-        self.btn_commit.setToolTip(
-            "Flush all edits, refresh checksum, and view diff vs original in Compare tab")
-        self.btn_commit.setStyleSheet(
-            "QPushButton{background:#1e4d1e;color:#2dff6e;border:1px solid #2dff6e;"
-            "padding:5px 14px;border-radius:3px;}"
-            "QPushButton:hover{background:#2a6b2a;}"
-            "QPushButton:disabled{background:#2d2d2d;color:#555;border-color:#555;}"
-        )
-        self.btn_commit.clicked.connect(self.commit_edits)
-        self.btn_commit.setEnabled(False)
 
         self.btn_save = QPushButton("Save .bin…")
         self.btn_save.clicked.connect(self.save_rom)
@@ -999,7 +984,6 @@ class MainWindow(QMainWindow):
 
         top.addWidget(self.lbl_file, 1)
         top.addWidget(btn_open)
-        top.addWidget(self.btn_commit)
         top.addWidget(self.btn_save)
         top.addWidget(self.btn_save512)
         root.addLayout(top)
@@ -1034,7 +1018,7 @@ class MainWindow(QMainWindow):
             "  893906266B — 7A Early (Audi 90 / Coupe Quattro 2.3 20v, 2-connector)\n"
             "  4A0906266  — AAH 12v  (Audi 100 / A6 / S4 2.8L V6)\n\n"
             "Double-click any map cell to edit.\n"
-            "Changed cells get a green border.  Commit to review vs original."
+            "Changed cells get a green border.  Save when ready."
         )
         welcome.setAlignment(Qt.AlignCenter)
         welcome.setStyleSheet("color:#555; font-size:13px;")
@@ -1108,7 +1092,6 @@ class MainWindow(QMainWindow):
             "color:#2dff6e; font-size:11px;" if cs_ok
             else "color:#ff9900; font-size:11px;")
 
-        self.btn_commit.setEnabled(True)
         self.btn_save.setEnabled(True)
         self.btn_save512.setEnabled(True)
 
@@ -1136,27 +1119,6 @@ class MainWindow(QMainWindow):
         self.statusBar().showMessage(
             f"Loaded {Path(path).name}  ·  {variant_name}  ·  "
             f"confidence: {result.confidence}")
-
-    # ── Commit ────────────────────────────────────────────────────────────────
-
-    def commit_edits(self):
-        """Flush all tab edits into current_data and refresh checksum display."""
-        self._collect_edits()
-        total_changed = sum(t.changed_count() for t in self._map_tabs)
-        self.info_panel.update_rom(bytes(self.current_data))
-        if self.current_variant:
-            cs_ok  = hr.verify_checksum(bytes(self.current_data), self.current_variant)
-            result = hr.detect(bytes(self.current_data))
-            self.lbl_file.setText(
-                f"{Path(self.current_path).name}  ·  {self.current_variant.name}  ·  "
-                f"CRC32 {result.crc32:#010x}  ·  "
-                f"{'✓ checksum OK' if cs_ok else '⚠ will fix on save'}  ·  "
-                f"{total_changed} cell(s) edited")
-            self.lbl_file.setStyleSheet(
-                "color:#2dff6e; font-size:11px;" if cs_ok
-                else "color:#ff9900; font-size:11px;")
-        self.statusBar().showMessage(
-            f"Committed — {total_changed} cell(s) edited vs original")
 
     # ── Save helpers ──────────────────────────────────────────────────────────
 
@@ -1289,4 +1251,5 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
