@@ -34,7 +34,7 @@ Windows `.exe`, macOS, and Linux binaries — no install required.
 |-----|------|--------|-------|
 | 893906266D | 27C512 (64KB) | 7A / NF 2.3 20v | Late 4-connector — primary target |
 | 893906266B | 27C512 (64KB) | 7A / NF 2.3 20v | Early 2-connector |
-| 4A0906266  | 27C512 (64KB) | AAH 2.8 12v V6  | Audi 100 / A6 / S4 |
+| 4A0906266  | 27C512 (64KB) | AAH 2.8 12v V6  | Audi 100 C4 2.8 12v |
 
 ---
 

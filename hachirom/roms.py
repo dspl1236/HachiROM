@@ -361,7 +361,7 @@ _MAPS_AAH = [
 ROM_AAH = ROMVariant(
     name="AAH 12v", version_key="AAH", part_number="4A0906266",
     chip="27C512", size=32768,
-    description="Audi 100 / A6 / S4 / Coupe Quattro 2.8L V6 12v",
+    description="Audi 100 C4 2.8 12v (AAH)",
     maps=_MAPS_AAH,
     checksum=CHECKSUM_PARAMS["AAH"],
     known_crc32s=[0x13db1432, 0x4818fa0b, 0x6875638d],

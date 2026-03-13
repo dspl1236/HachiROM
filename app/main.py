@@ -1431,7 +1431,7 @@ class MainWindow(QMainWindow):
             "Supported ECUs:\n"
             "  893906266D — 7A Late  (Audi 90 / Coupe Quattro 2.3 20v, 4-connector)\n"
             "  893906266B — 7A Early (Audi 90 / Coupe Quattro 2.3 20v, 2-connector)\n"
-            "  4A0906266  — AAH 12v  (Audi 100 / A6 / S4 2.8L V6)\n\n"
+            "  4A0906266  — AAH 12v  (Audi 100 C4 2.8 12v)\n\n"
             "Double-click any map cell to edit.\n"
             "Changed cells get a green border.  Save when ready."
         )
