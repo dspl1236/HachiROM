@@ -609,7 +609,13 @@ ROM_AAH = ROMVariant(
     description="Audi 100 C4 2.8 12v (AAH)",
     maps=_MAPS_AAH,
     checksum=CHECKSUM_PARAMS["AAH"],
-    known_crc32s=[0x13db1432, 0x4818fa0b, 0x6875638d],
+    known_crc32s=[
+        0x13db1432,   # AAH_Stock_RIP_Chip.034 (unscrambled, lower 32KB)
+        0x4818fa0b,   # AAH_MMS100 stock variant 2
+        0x6875638d,   # AAH_MMS100_4A0906266_stock.bin — flat bin
+        0xadab4b96,   # AAH_MMS100_4A0906266_stock_edited.bin — minor edit
+        0xdb5aab67,   # AAH_Stage_1__R1.034 (unscrambled) — Stage 1 tune
+    ],
     reset_vector=bytes([0xEF, 0x18]),
 )
 
