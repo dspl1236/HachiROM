@@ -1,7 +1,7 @@
 # HachiROM
 
 **Hitachi MMS ECU ROM editor — 7A 20v and AAH 12v**  
-Standalone desktop app plus Python library. No Teensy or serial connection required.
+Standalone desktop app plus Python library.
 
 [![Build HachiROM](https://github.com/dspl1236/HachiROM/actions/workflows/build.yml/badge.svg)](https://github.com/dspl1236/HachiROM/actions/workflows/build.yml)
 ![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20Linux%20%7C%20Mac-blue)
