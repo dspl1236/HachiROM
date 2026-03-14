@@ -1060,10 +1060,13 @@ class InjectorCalcWidget(QWidget):
 
 
 class OverviewTab(QWidget):
-    """First tab — surfaces RPM Limit, Injection Scaler, CL Disable RPM
-    as simple labelled input fields. Mirrors the DigiTool overview UX."""
+    """
+    First tab — ROM identity card + scalar editors.
+    Top: full-width ROM info (variant, patches, checksums).
+    Bottom: scalar editors (RPM limit, CL limit, injection scaler).
+    Right sidebar: tuning tips panel.
+    """
 
-    # Names of maps to surface (in order). Only shown if present in the variant.
     FIELD_NAMES = ["RPM Limit", "Injection Scaler", "CL Disable RPM", "CL RPM Limit"]
 
     def __init__(self, variant, rom_snapshot: bytes, parent=None):
@@ -1072,7 +1075,6 @@ class OverviewTab(QWidget):
         self._build_ui(variant, rom_snapshot)
 
     def _build_ui(self, variant, rom_snapshot: bytes):
-        # Two-column layout: left = input fields, right = tips panel
         root = QHBoxLayout(self)
         root.setContentsMargins(0, 0, 0, 0)
         root.setSpacing(0)
@@ -1083,7 +1085,13 @@ class OverviewTab(QWidget):
         outer.setContentsMargins(20, 20, 12, 20)
         outer.setSpacing(0)
 
-        # ── REV LIMIT section ────────────────────────────────────────────────
+        # ── ROM INFO CARD ─────────────────────────────────────────────────────
+        outer.addWidget(self._section_header("ROM IDENTITY", ""))
+        self._rom_card = self._build_rom_card(variant, rom_snapshot)
+        outer.addWidget(self._rom_card)
+        outer.addSpacing(20)
+
+        # ── REV LIMIT section ─────────────────────────────────────────────────
         rpm_maps = [m for m in variant.maps if m.name == "RPM Limit"]
         if rpm_maps:
             outer.addWidget(self._section_header(
@@ -1096,24 +1104,20 @@ class OverviewTab(QWidget):
             outer.addWidget(field)
             outer.addSpacing(8)
 
-        # ── ECU PARAMETERS section ───────────────────────────────────────────
+        # ── ECU PARAMETERS section ────────────────────────────────────────────
         param_names = ["Injection Scaler", "CL Disable RPM", "CL RPM Limit"]
         param_maps  = [m for m in variant.maps if m.name in param_names]
         param_maps.sort(key=lambda m: param_names.index(m.name)
                         if m.name in param_names else 99)
         has_scaler = any(m.name == "Injection Scaler" for m in variant.maps)
 
-        # Section subtitle — variant-aware
-        if not has_scaler:
-            subtitle = ("Injection Scaler is not present on this ECU variant — "
-                        "the injector pulse is fixed in firmware. "
-                        "Use the fuel map to adjust fuelling.")
-        else:
-            subtitle = ("Click a row to see tuning tips →  "
-                        "Single-byte scalars that affect the whole fuel system.")
+        subtitle = (
+            "Injection Scaler not present — injector pulse fixed in firmware. "
+            "Tune via fuel map." if not has_scaler
+            else "Single-byte scalars that affect the whole fuel system.")
 
-        if param_maps:
-            outer.addSpacing(16)
+        if param_maps or not has_scaler:
+            outer.addSpacing(8)
             outer.addWidget(self._section_header("ECU PARAMETERS", subtitle))
             for m in param_maps:
                 field = OverviewField(m, rom_snapshot)
@@ -1121,20 +1125,14 @@ class OverviewTab(QWidget):
                 self._fields.append(field)
                 outer.addWidget(field)
                 outer.addSpacing(4)
-        elif not has_scaler:
-            outer.addSpacing(16)
-            outer.addWidget(self._section_header("ECU PARAMETERS", subtitle))
 
         outer.addStretch()
 
-        # ── Injector / FPR calculator ────────────────────────────────────────
-        self._inj_calc = InjectorCalcWidget()
-        outer.addWidget(self._inj_calc)
-
-        # ── Workflow hint ────────────────────────────────────────────────────
+        # ── Workflow hint ─────────────────────────────────────────────────────
         hint = QLabel(
             "Workflow:  Open ROM  →  edit values above  →  "
-            "Save 27C512 .bin  →  burn with TL866 / T48  →  install  →  test")
+            "Save 27C512 .bin  →  burn with TL866 / T48  →  install  →  test\n"
+            "Hardware patches (MAF axis, CO pot):  see the Hardware tab →")
         hint.setWordWrap(True)
         hint.setStyleSheet("color:#555; font-size:11px; padding:12px 0 0 0;")
         outer.addWidget(hint)
@@ -1147,6 +1145,72 @@ class OverviewTab(QWidget):
 
         root.addWidget(left_widget, stretch=1)
         root.addWidget(self._tips_panel)
+
+    def _build_rom_card(self, variant, rom_snapshot: bytes) -> QWidget:
+        """Compact ROM identity card — variant, patches, checksum."""
+        w = QWidget()
+        w.setStyleSheet(
+            "background:#1a1a1a; border-radius:6px; border:1px solid #2a2a2a;")
+        grid = QVBoxLayout(w)
+        grid.setContentsMargins(14, 10, 14, 10)
+        grid.setSpacing(4)
+
+        def row(label, value, value_colour="#e0e0e0"):
+            r = QHBoxLayout()
+            lbl = QLabel(label)
+            lbl.setFixedWidth(130)
+            lbl.setStyleSheet("color:#666; font-size:11px;")
+            val = QLabel(value)
+            val.setStyleSheet(f"color:{value_colour}; font-size:11px; font-family:Consolas;")
+            val.setWordWrap(True)
+            r.addWidget(lbl)
+            r.addWidget(val, 1)
+            return r
+
+        grid.addLayout(row("Variant",     variant.name))
+        grid.addLayout(row("Part number", variant.part_number))
+        grid.addLayout(row("Chip",        variant.chip))
+
+        res    = hr.detect(rom_snapshot)
+        cs_sum = hr.compute_sum(rom_snapshot)
+        cs_tgt = variant.checksum.get("target", 0)
+        cs_ok  = cs_sum == cs_tgt
+        grid.addLayout(row("Confidence",  res.confidence))
+        grid.addLayout(row("CRC32",       f"{res.crc32:#010x}"))
+        grid.addLayout(row("SHA256",      res.sha256[:24] + "…"))
+        grid.addLayout(row("Checksum",
+                           "✓ VALID" if cs_ok else "⚠ INVALID — will be corrected on save",
+                           "#2dff6e" if cs_ok else "#ffaa00"))
+
+        # Patches
+        is_266d = "266D" in variant.part_number
+        if is_266d:
+            maf_state  = hr.detect_maf_patch(rom_snapshot)
+            cop_state  = hr.detect_co_pot_patch(rom_snapshot)
+            maf_label  = maf_state if isinstance(maf_state, str) else str(maf_state)
+            cop_colour = "#2dff6e" if cop_state == "patched" else "#ffaa00"
+            maf_colour = "#aaa"    if maf_label == "stock_7a" else "#2dff6e"
+            grid.addLayout(row("MAF profile",  maf_label,  maf_colour))
+            grid.addLayout(row("CO pot state", cop_state,  cop_colour))
+
+        return w
+
+    def update_rom_card(self, variant, rom_snapshot: bytes):
+        """Refresh the ROM card after patches are applied."""
+        # Rebuild card in place
+        old = self._rom_card
+        new  = self._build_rom_card(variant, rom_snapshot)
+        layout = self.findChild(QVBoxLayout)
+        # Walk left column to replace card
+        lw = self.layout().itemAt(0).widget()
+        lv = lw.layout()
+        for i in range(lv.count()):
+            if lv.itemAt(i) and lv.itemAt(i).widget() is old:
+                lv.removeWidget(old)
+                old.deleteLater()
+                lv.insertWidget(i, new)
+                self._rom_card = new
+                break
 
     @staticmethod
     def _section_header(title: str, subtitle: str) -> QWidget:
@@ -1164,24 +1228,22 @@ class OverviewTab(QWidget):
         sep.setFrameShape(QFrame.HLine)
         sep.setStyleSheet("color:#2a2a2a;")
         v.addWidget(t)
-        v.addWidget(s)
+        if subtitle:
+            v.addWidget(s)
         v.addWidget(sep)
         return w
 
     def _on_field_selected(self, field: "OverviewField"):
-        """Update the tips panel when a field is clicked or focused."""
         self._tips_panel.update_map(
             field.map_def.name,
             map_def=field.map_def,
             info=_MAP_TIPS.get(field.map_def.name))
 
     def show_first_tip(self):
-        """Pre-populate tips panel with first field on load."""
         if self._fields:
             self._on_field_selected(self._fields[0])
 
     def build_patches(self) -> dict:
-        """Merged patch dict from all fields."""
         patch = {}
         for f in self._fields:
             patch.update(f.build_patch())
@@ -1194,6 +1256,166 @@ class OverviewTab(QWidget):
 # ---------------------------------------------------------------------------
 # Compare tab  — can be pre-loaded programmatically
 # ---------------------------------------------------------------------------
+
+class HardwareTab(QWidget):
+    """
+    Hardware configuration tab.
+    Houses MAF patch, CO pot patch, and injector/FPR calculator.
+    These are physical hardware decisions, separate from ROM map tuning.
+    """
+
+    # Emitted when a patch is applied so MainWindow can propagate it
+    patch_requested = pyqtSignal(str, object)  # (patch_type, data)
+
+    def __init__(self, rom_data: bytes, variant, parent=None):
+        super().__init__(parent)
+        self._rom      = rom_data
+        self._variant  = variant
+        self._is_266d  = variant and "266D" in variant.part_number
+        self._build_ui()
+
+    def _build_ui(self):
+        root = QVBoxLayout(self)
+        root.setContentsMargins(20, 20, 20, 20)
+        root.setSpacing(0)
+
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setStyleSheet("QScrollArea { border:none; background:transparent; }")
+        inner = QWidget()
+        layout = QVBoxLayout(inner)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(20)
+        scroll.setWidget(inner)
+        root.addWidget(scroll)
+
+        # ── MAF SENSOR ───────────────────────────────────────────────────────
+        layout.addWidget(self._section_header(
+            "MAF SENSOR",
+            "Select the MAF sensor housing fitted to your engine. "
+            "The ECU axis bytes are rewritten to match the new housing bore. "
+            "266D only — 266B uses a different linearisation table."))
+
+        maf_row = QHBoxLayout()
+        maf_row.setSpacing(12)
+
+        if self._is_266d:
+            maf_state = hr.detect_maf_patch(self._rom)
+            maf_colour = "#aaa" if maf_state == "stock_7a" else "#2dff6e"
+            self.lbl_maf = QLabel(f"Current profile:  {maf_state}")
+            self.lbl_maf.setStyleSheet(f"color:{maf_colour}; font-size:12px;")
+            self.btn_maf = QPushButton("Change MAF Profile…")
+            self.btn_maf.setFixedWidth(180)
+            self.btn_maf.setStyleSheet(
+                "QPushButton { background:#1a3a5a; color:#fff; border:none; "
+                "border-radius:3px; padding:5px 12px; font-size:12px; }"
+                "QPushButton:hover { background:#1e4f7a; }")
+            self.btn_maf.clicked.connect(self._open_maf)
+            maf_row.addWidget(self.lbl_maf, 1)
+            maf_row.addWidget(self.btn_maf)
+        else:
+            lbl = QLabel("MAF axis patch not available on this variant (266D only).")
+            lbl.setStyleSheet("color:#555; font-size:11px;")
+            maf_row.addWidget(lbl)
+        layout.addLayout(maf_row)
+
+        layout.addWidget(self._divider())
+
+        # ── CO POT ───────────────────────────────────────────────────────────
+        layout.addWidget(self._section_header(
+            "CO POT (IDLE MIXTURE TRIM)",
+            "The CO pot was an emissions adjustment tool — a technician would "
+            "turn the pot on the MAF body to trim idle CO content at the annual "
+            "inspection. If the pot is disturbed or missing, the ECU chases a "
+            "bad signal and trims fuel incorrectly. The patch zeros the gain "
+            "so pin 4 has no fuelling effect regardless of what voltage it sees."))
+
+        cop_row = QHBoxLayout()
+        cop_row.setSpacing(12)
+
+        if self._is_266d:
+            cop_state  = hr.detect_co_pot_patch(self._rom)
+            cop_colour = "#2dff6e" if cop_state == "patched" else "#ffaa00"
+            self.lbl_cop = QLabel(f"Current state:  {cop_state}")
+            self.lbl_cop.setStyleSheet(f"color:{cop_colour}; font-size:12px;")
+            self.btn_cop = QPushButton("Change CO Pot State…")
+            self.btn_cop.setFixedWidth(180)
+            self.btn_cop.setStyleSheet(
+                "QPushButton { background:#3a1a1a; color:#fff; border:none; "
+                "border-radius:3px; padding:5px 12px; font-size:12px; }"
+                "QPushButton:hover { background:#5a2222; }")
+            self.btn_cop.clicked.connect(self._open_copot)
+            cop_row.addWidget(self.lbl_cop, 1)
+            cop_row.addWidget(self.btn_cop)
+        else:
+            lbl = QLabel("CO pot patch not available on this variant (266D only).")
+            lbl.setStyleSheet("color:#555; font-size:11px;")
+            cop_row.addWidget(lbl)
+        layout.addLayout(cop_row)
+
+        layout.addWidget(self._divider())
+
+        # ── INJECTOR / FPR CALCULATOR ─────────────────────────────────────────
+        layout.addWidget(self._section_header(
+            "INJECTOR / FPR CALCULATOR",
+            "Enter your injector rated flow (@ 3bar), fuel pressure, and "
+            "displacement to see actual delivery vs stock and the FPR target "
+            "for your engine size."))
+        self._inj_calc = InjectorCalcWidget()
+        layout.addWidget(self._inj_calc)
+
+        layout.addStretch()
+
+    @staticmethod
+    def _section_header(title: str, subtitle: str) -> QWidget:
+        w = QWidget()
+        v = QVBoxLayout(w)
+        v.setContentsMargins(0, 0, 0, 4)
+        v.setSpacing(2)
+        t = QLabel(title)
+        t.setStyleSheet(
+            "color:#2dff6e; font-size:10px; font-weight:bold; letter-spacing:2px;")
+        s = QLabel(subtitle)
+        s.setWordWrap(True)
+        s.setStyleSheet("color:#555; font-size:11px;")
+        sep = QFrame()
+        sep.setFrameShape(QFrame.HLine)
+        sep.setStyleSheet("color:#2a2a2a;")
+        v.addWidget(t)
+        v.addWidget(s)
+        v.addWidget(sep)
+        return w
+
+    @staticmethod
+    def _divider() -> QFrame:
+        sep = QFrame()
+        sep.setFrameShape(QFrame.HLine)
+        sep.setStyleSheet("color:#1e1e1e; margin:4px 0;")
+        return sep
+
+    def _open_maf(self):
+        dlg = MafPatchDialog(self._rom, parent=self)
+        if dlg.exec_() == QDialog.Accepted:
+            self.patch_requested.emit("maf", dlg)
+
+    def _open_copot(self):
+        dlg = CoPotPatchDialog(self._rom, parent=self)
+        if dlg.exec_() == QDialog.Accepted:
+            self.patch_requested.emit("copot", dlg)
+
+    def update_rom(self, rom_data: bytes):
+        """Refresh patch state labels after ROM is modified."""
+        self._rom = rom_data
+        if self._is_266d:
+            maf_state  = hr.detect_maf_patch(rom_data)
+            cop_state  = hr.detect_co_pot_patch(rom_data)
+            maf_colour = "#aaa" if maf_state == "stock_7a" else "#2dff6e"
+            cop_colour = "#2dff6e" if cop_state == "patched" else "#ffaa00"
+            self.lbl_maf.setText(f"Current profile:  {maf_state}")
+            self.lbl_maf.setStyleSheet(f"color:{maf_colour}; font-size:12px;")
+            self.lbl_cop.setText(f"Current state:  {cop_state}")
+            self.lbl_cop.setStyleSheet(f"color:{cop_colour}; font-size:12px;")
+
 
 class CompareTab(QWidget):
     def __init__(self, parent=None):
@@ -2091,9 +2313,10 @@ class MainWindow(QMainWindow):
         self.current_variant  = None
         self._rom_snapshot:   bytes = b""   # original ROM bytes at open time — never mutated
         self._map_tabs:       list[MapTab] = []
-        self._overview_tab:  OverviewTab | None = None
-        self._hex_tab:       HexViewTab | None = None
-        self._scalars_tab:   ScalarsTab | None = None
+        self._overview_tab:   OverviewTab | None = None
+        self._hardware_tab:   HardwareTab | None = None
+        self._hex_tab:        HexViewTab | None = None
+        self._scalars_tab:    ScalarsTab | None = None
         self._compare_tab_idx: int = -1
         self._build_menu()
         self._build_ui()
@@ -2147,31 +2370,6 @@ class MainWindow(QMainWindow):
         self.btn_save512.clicked.connect(self.save_27c512)
         self.btn_save512.setEnabled(False)
 
-        self.btn_maf = QPushButton("MAF Patch…")
-        self.btn_maf.setToolTip(
-            "Patch MAF sensor axis tables for a different housing\n"
-            "(266D / 7A Late only)")
-        self.btn_maf.clicked.connect(self.open_maf_patch)
-        self.btn_maf.setEnabled(False)
-        self.btn_maf.setStyleSheet(
-            "QPushButton { background:#2a1a00; color:#ff9900; border:1px solid #664400; "
-            "padding:5px 14px; border-radius:3px; }"
-            "QPushButton:hover { background:#3d2700; }"
-            "QPushButton:disabled { background:#1e1e1e; color:#444; border-color:#333; }")
-
-        self.btn_copot = QPushButton("CO Pot…")
-        self.btn_copot.setToolTip(
-            "Disable CO pot (pin 4) fault and trim\n"
-            "Use when fitting a sensor with no CO pot (e.g. 1.8T)\n"
-            "(266D only)")
-        self.btn_copot.clicked.connect(self.open_co_pot_patch)
-        self.btn_copot.setEnabled(False)
-        self.btn_copot.setStyleSheet(
-            "QPushButton { background:#001a2a; color:#4db8ff; border:1px solid #004466; "
-            "padding:5px 14px; border-radius:3px; }"
-            "QPushButton:hover { background:#002a3d; }"
-            "QPushButton:disabled { background:#1e1e1e; color:#444; border-color:#333; }")
-
         self.btn_compare = QPushButton("⊕ Compare…")
         self.btn_compare.setToolTip("Open the Compare tab and load a second ROM to diff against")
         self.btn_compare.clicked.connect(self._open_compare_tab)
@@ -2185,8 +2383,6 @@ class MainWindow(QMainWindow):
         top.addWidget(btn_open)
         top.addWidget(self.btn_save)
         top.addWidget(self.btn_save512)
-        top.addWidget(self.btn_maf)
-        top.addWidget(self.btn_copot)
         top.addWidget(self.btn_compare)
         root.addLayout(top)
 
@@ -2196,21 +2392,16 @@ class MainWindow(QMainWindow):
         self.tabs.currentChanged.connect(self._maybe_refresh_hex)
         splitter.addWidget(self.tabs)
 
-        # Right sidebar: map context panel (top) + ROM info (bottom)
-        sidebar        = QWidget()
-        sb_layout      = QVBoxLayout(sidebar)
+        # Right sidebar: map context panel only (ROM info moved to Overview tab)
+        sidebar       = QWidget()
+        sb_layout     = QVBoxLayout(sidebar)
         sb_layout.setContentsMargins(0, 0, 0, 0)
         sb_layout.setSpacing(0)
-        self.map_panel  = MapInfoPanel()
-        self.info_panel = ROMInfoWidget()
-        sb_splitter     = QSplitter(Qt.Vertical)
-        sb_splitter.addWidget(self.map_panel)
-        sb_splitter.addWidget(self.info_panel)
-        sb_splitter.setSizes([340, 420])
-        sb_layout.addWidget(sb_splitter)
+        self.map_panel = MapInfoPanel()
+        sb_layout.addWidget(self.map_panel)
 
         splitter.addWidget(sidebar)
-        splitter.setSizes([900, 380])
+        splitter.setSizes([900, 320])
         root.addWidget(splitter, 1)
 
         welcome = QLabel(
@@ -2239,13 +2430,20 @@ class MainWindow(QMainWindow):
     # -- Tab change -> update map info panel ------------------------------------
 
     def _on_rom_changed(self):
-        """Called whenever any map tab or overview field commits an edit.
-        Marks the hex tab dirty so it refreshes on next activation.
-        Also refreshes the scalars tab with the new assembled ROM."""
+        """Called whenever any map tab or overview field commits an edit."""
         if self._hex_tab:
             self._hex_tab.mark_dirty()
         if self._scalars_tab:
             self._scalars_tab.update_rom(self._build_rom())
+        if self._hardware_tab:
+            self._hardware_tab.update_rom(self._build_rom())
+
+    def _on_hardware_patch(self, patch_type: str, dlg):
+        """Route patch dialogs from HardwareTab back through existing handlers."""
+        if patch_type == "maf":
+            self._apply_maf_patch_from_dialog(dlg)
+        elif patch_type == "copot":
+            self._apply_copot_patch_from_dialog(dlg)
 
     def _maybe_refresh_hex(self, index: int):
         """Refresh the hex tab when the user switches to it."""
@@ -2313,48 +2511,23 @@ class MainWindow(QMainWindow):
         self.btn_save.setEnabled(True)
         self.btn_save512.setEnabled(True)
 
-        # MAF patch button — 266D only
-        is_266d = (result.variant and result.variant.version_key == "266D")
-        self.btn_maf.setEnabled(bool(is_266d))
-        if is_266d:
-            maf_key = hr.detect_maf_patch(data)
-            maf_profile = hr.MAF_PROFILES.get(maf_key, {})
-            maf_label   = maf_profile.get("label", maf_key)
-            self.btn_maf.setText(f"MAF: {maf_label} ▾")
-            self.btn_maf.setToolTip(
-                f"Current sensor axis: {maf_label}\n"
-                f"Click to patch for a different MAF housing.")
-        else:
-            self.btn_maf.setText("MAF Patch…")
-
-        # CO pot patch button — 266D only
-        self.btn_copot.setEnabled(bool(is_266d))
-        if is_266d:
-            copot_state = hr.detect_co_pot_patch(data)
-            copot_label = {"stock": "stock", "patched": "disabled", "unknown": "unknown"}.get(copot_state, copot_state)
-            self.btn_copot.setText(f"CO Pot: {copot_label} ▾")
-            self.btn_copot.setToolTip(
-                f"CO pot trim state: {copot_label}\n"
-                f"Click to disable (for sensors without CO pot) or restore.")
-        else:
-            self.btn_copot.setText("CO Pot…")
-
-
         while self.tabs.count():
             self.tabs.removeTab(0)
-        self._map_tabs = []
-        self._overview_tab = None
-        self._hex_tab = None
-        self._scalars_tab = None
+        self._map_tabs    = []
+        self._overview_tab  = None
+        self._hardware_tab  = None
+        self._hex_tab       = None
+        self._scalars_tab   = None
 
         if result.variant:
-            # Overview tab — always first
+            # Overview tab — ROM identity + scalar editors
             self._overview_tab = OverviewTab(result.variant, self._rom_snapshot)
             for field in self._overview_tab._fields:
                 field.changed.connect(self._on_rom_changed)
             self._overview_tab.show_first_tip()
             self.tabs.insertTab(0, self._overview_tab, "Overview")
 
+            # Map tabs
             editable = [m for m in result.variant.maps
                         if m.is_2d or (m.cols > 1
                             and not m.name.lower().startswith("rpm")
@@ -2364,24 +2537,29 @@ class MainWindow(QMainWindow):
                 tab.rom_changed.connect(self._on_rom_changed)
                 self._map_tabs.append(tab)
                 self.tabs.addTab(tab, m.name)
+
+            # Hardware tab — MAF, CO pot, injector calc
+            self._hardware_tab = HardwareTab(
+                self._rom_snapshot, result.variant)
+            self._hardware_tab.patch_requested.connect(self._on_hardware_patch)
+            self.tabs.addTab(self._hardware_tab, "⚙ Hardware")
         else:
             self._overview_tab = None
 
         self.compare_tab = CompareTab()
         self._compare_tab_idx = self.tabs.addTab(self.compare_tab, "⊕ Compare")
 
-        # Scalars reference tab — always present when variant identified
+        # Scalars reference tab
         if result.variant:
             self._scalars_tab = ScalarsTab(self._rom_snapshot)
             self.tabs.addTab(self._scalars_tab, "⚙ Scalars")
 
-        # Hex tab — always last, shows assembled working ROM (edits + checksum)
+        # Hex tab — always last
         self._hex_tab = HexViewTab(
             self._build_rom if result.variant else (lambda: self._rom_snapshot),
             unrecognised=not bool(result.variant))
         self.tabs.addTab(self._hex_tab, "⬡ Hex")
 
-        self.info_panel.update_rom(self._rom_snapshot)
         self.statusBar().showMessage(
             f"Loaded {Path(path).name}  ·  {variant_name}  ·  "
             f"confidence: {result.confidence}")
@@ -2456,10 +2634,53 @@ class MainWindow(QMainWindow):
         except Exception as e:
             QMessageBox.critical(self, "Save Error", str(e))
 
+    # ── Hardware patch routing ────────────────────────────────────────────────
+
+    def _apply_maf_patch_from_dialog(self, dlg):
+        profile_key = dlg.selected_profile()
+        try:
+            patched = hr.apply_maf_patch(self._rom_snapshot, profile_key)
+        except Exception as e:
+            QMessageBox.critical(self, "MAF Patch Error", str(e))
+            return
+        self._rom_snapshot = patched
+        self._load_rom(self.current_path)
+        profile = hr.MAF_PROFILES[profile_key]
+        msg = (f"MAF axis patched to:\n{profile['label']}\n\n"
+               f"{profile['housing']}\n{profile['hp_note']}")
+        if not profile["co_pot"]:
+            msg += ("\n\n⚠  This sensor has no CO pot.\n"
+                    "Use the Hardware tab → CO Pot to disable the trim\n"
+                    "and suppress fault 00521.")
+        QMessageBox.information(self, "MAF Patch Applied", msg)
+
+    def _apply_copot_patch_from_dialog(self, dlg):
+        disable = dlg._rb_disable.isChecked()
+        try:
+            patched = hr.apply_co_pot_patch(self._rom_snapshot, disable=disable)
+        except Exception as e:
+            QMessageBox.critical(self, "CO Pot Patch Error", str(e))
+            return
+        self._rom_snapshot = patched
+        self._load_rom(self.current_path)
+        if disable:
+            msg = ("CO pot trim DISABLED.\n\n"
+                   "  0x0762 → 0x00  (low threshold → 0 V)\n"
+                   "  0x0763 → 0xFF  (high threshold → 5 V)\n"
+                   "  0x0779 → 0x00  (trim gain zeroed)\n\n"
+                   "Pin 4 can be left open. Fault 00521 will not fire.")
+        else:
+            msg = ("CO pot trim RESTORED to stock.\n\n"
+                   "  0x0762 → 0x0A  (low threshold ~0.20 V)\n"
+                   "  0x0763 → 0xEE  (high threshold ~4.67 V)\n"
+                   "  0x0779 → 0x04  (trim gain = 4)\n\n"
+                   "⚠  CO pot must be wired on pin 4 or fault 00521 will return.")
+        QMessageBox.information(self, "CO Pot Patch Applied", msg)
+
     # ── MAF patch ─────────────────────────────────────────────────────────────
 
     def open_maf_patch(self):
-        """Open the MAF sensor patch dialog and apply the chosen profile."""
+        """Open the MAF sensor patch dialog (legacy toolbar entry point)."""
         if not self._rom_snapshot:
             return
         if not (self.current_variant and self.current_variant.version_key == "266D"):
@@ -2467,38 +2688,14 @@ class MainWindow(QMainWindow):
                 self, "MAF Patch",
                 "MAF axis patching is only supported for the 266D (7A Late) ECU.")
             return
-
         dlg = MafPatchDialog(self._rom_snapshot, parent=self)
-        if dlg.exec_() != QDialog.Accepted:
-            return
-
-        profile_key = dlg.selected_profile()
-        try:
-            patched = hr.apply_maf_patch(self._rom_snapshot, profile_key)
-        except Exception as e:
-            QMessageBox.critical(self, "MAF Patch Error", str(e))
-            return
-
-        # Reload the patched data as the new working snapshot.
-        # This is a deliberate full reload so all open map tabs, the hex view,
-        # and the overview panel reflect the new axis values immediately.
-        self._rom_snapshot = patched
-        self._load_rom(self.current_path)
-
-        profile = hr.MAF_PROFILES[profile_key]
-        msg = (f"MAF axis patched to:\n{profile['label']}\n\n"
-               f"{profile['housing']}\n{profile['hp_note']}")
-        if not profile["co_pot"]:
-            msg += (
-                "\n\n⚠  This sensor has no CO pot.\n"
-                "Use the CO Pot button in the toolbar to disable the CO pot trim\n"
-                "and suppress fault 00521 — no external pot required.")
-        QMessageBox.information(self, "MAF Patch Applied", msg)
+        if dlg.exec_() == QDialog.Accepted:
+            self._apply_maf_patch_from_dialog(dlg)
 
     # ── CO pot patch ──────────────────────────────────────────────────────────
 
     def open_co_pot_patch(self):
-        """Open the CO pot patch dialog and apply the chosen option."""
+        """Open the CO pot patch dialog (legacy toolbar entry point)."""
         if not self._rom_snapshot:
             return
         if not (self.current_variant and self.current_variant.version_key == "266D"):
@@ -2506,40 +2703,9 @@ class MainWindow(QMainWindow):
                 self, "CO Pot Patch",
                 "CO pot patching is only supported for the 266D (7A Late) ECU.")
             return
-
         dlg = CoPotPatchDialog(self._rom_snapshot, parent=self)
-        if dlg.exec_() != QDialog.Accepted:
-            return
-
-        disable = dlg._rb_disable.isChecked()
-        try:
-            patched = hr.apply_co_pot_patch(self._rom_snapshot, disable=disable)
-        except Exception as e:
-            QMessageBox.critical(self, "CO Pot Patch Error", str(e))
-            return
-
-        self._rom_snapshot = patched
-        self._load_rom(self.current_path)
-
-        if disable:
-            msg = (
-                "CO pot trim DISABLED.\n\n"
-                "Patch applied:\n"
-                "  0x0762 → 0x00  (low threshold widened to 0 V)\n"
-                "  0x0763 → 0xFF  (high threshold widened to 5 V)\n"
-                "  0x0779 → 0x00  (trim gain zeroed)\n\n"
-                "Pin 4 can now be left unconnected without triggering fault 00521.\n"
-                "No CO pot hardware is required.")
-        else:
-            msg = (
-                "CO pot trim RESTORED to stock.\n\n"
-                "Original values restored:\n"
-                "  0x0762 → 0x0A  (low threshold ~0.20 V)\n"
-                "  0x0763 → 0xEE  (high threshold ~4.67 V)\n"
-                "  0x0779 → 0x04  (trim gain = 4)\n\n"
-                "⚠  CO pot must be wired on pin 4 or fault 00521 will return.")
-        QMessageBox.information(self, "CO Pot Patch Applied", msg)
-
+        if dlg.exec_() == QDialog.Accepted:
+            self._apply_copot_patch_from_dialog(dlg)
 
 
     def _open_compare_tab(self):
