@@ -30,6 +30,11 @@ from .maps   import (read_map, read_map_decoded, write_map, write_map_encoded,
                      detect_maf_patch, apply_maf_patch,
                      detect_co_pot_patch, apply_co_pot_patch,
                      detect_injection_scaler_trick, apply_injection_scaler_trick,
+                     PIN4_ADC_AXIS, PIN4_SENSOR_TABLES,
+                     PIN4_WIDEBAND_TABLES, PIN4_MAP_TABLES, PIN4_IAT_TABLE,
+                     PIN4_TABLE_BASE, PIN4_TYPE_NONE, PIN4_TYPE_WIDEBAND,
+                     PIN4_TYPE_MAP, PIN4_TYPE_IAT, PIN4_TYPE_RAW,
+                     detect_pin4_patch, apply_pin4_patch,
                      CO_POT_LOW_THRESHOLD_ADDR, CO_POT_HIGH_THRESHOLD_ADDR,
                      CO_POT_NEUTRAL_ADDR, CO_POT_WINDOW_ADDR, CO_POT_GAIN_ADDR)
 from .roms   import (ROMVariant, MapDef, ALL_VARIANTS,
@@ -45,7 +50,7 @@ from .roms   import (ROMVariant, MapDef, ALL_VARIANTS,
                      MAF_AXIS_1_8T_60, MAF_AXIS_1_8T_VR6,
                      MAF_AXIS_ADDR_FUEL, MAF_AXIS_ADDR_TIMING)
 
-__version__ = "0.7.4"
+__version__ = "0.8.0"
 
 __all__ = [
     "detect", "load_bin", "save_bin", "load_bin_normalised", "DetectionResult",
@@ -56,6 +61,11 @@ __all__ = [
     "detect_maf_patch", "apply_maf_patch",
     "detect_co_pot_patch", "apply_co_pot_patch",
     "detect_injection_scaler_trick", "apply_injection_scaler_trick",
+    "PIN4_ADC_AXIS", "PIN4_SENSOR_TABLES",
+    "PIN4_WIDEBAND_TABLES", "PIN4_MAP_TABLES", "PIN4_IAT_TABLE",
+    "PIN4_TABLE_BASE", "PIN4_TYPE_NONE", "PIN4_TYPE_WIDEBAND",
+    "PIN4_TYPE_MAP", "PIN4_TYPE_IAT", "PIN4_TYPE_RAW",
+    "detect_pin4_patch", "apply_pin4_patch",
     "CO_POT_LOW_THRESHOLD_ADDR", "CO_POT_HIGH_THRESHOLD_ADDR",
     "CO_POT_NEUTRAL_ADDR", "CO_POT_WINDOW_ADDR", "CO_POT_GAIN_ADDR",
     "ROMVariant", "MapDef", "ALL_VARIANTS",

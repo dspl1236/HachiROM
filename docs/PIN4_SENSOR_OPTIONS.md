@@ -1,108 +1,116 @@
-# Pin 4 — Freed ADC Input Options
+# Pin 4 — Freed ADC Input: Sensor Options & Patches
 
 When the CO pot disable patch is applied, ECU pin 4 (MAF connector) becomes
-an electrically inert input — the ADC still samples it every cycle but the
-gain is zeroed so the reading has no effect on fuelling.
+a free 0–5V ADC input. The signal is still sampled every cycle but the gain
+is zeroed, so it has no effect on fuelling.
 
-**Availability depends on MAF configuration:**
-
-| MAF setup | Pin 4 status | Free for use? |
-|-----------|-------------|---------------|
-| Stock 7A sensor (054 133 471) | CO pot wiper — in use | Only if CO pot patch applied |
-| AAH V6 housing + 7A sensor transplant | CO pot wiper — in use | Only if CO pot patch applied |
-| AAH V6 3-wire sensor (078 133 471) | No connection | ✓ Always free |
-| Bosch 1.8T (4-pin AEB) | No CO pot | ✓ Always free (patch required) |
-| Bosch 1.8T (5-pin ATW/AWM) | No CO pot | ✓ Always free (patch required) |
+HachiROM can write a linearisation table for the fitted sensor into a safe
+free ROM block. This documents the sensor for the Teensy emulator and enables
+future correction table support when firmware patches are implemented.
 
 ---
 
-## Option A — External data logging (Teensy)
+## Requirements
 
-The simplest use: tap pin 4 before the ECU and feed it to a Teensy analog
-input. The ECU remains unaware. No ROM changes needed beyond the CO pot patch.
-
-**Useful for:**
-- Wideband O2 (0–5V analog output from Innovate LC-2, AEM UEGO etc)
-- Boost pressure (MAP sensor 0–5V absolute)
-- IAT from an integrated sensor (e.g. 1.8T 5-pin MAF)
-
-The Teensy can log pin 4 voltage alongside the active map slot, RPM, and
-any other channels — giving a data stream tied directly to ECU operation.
+1. **CO pot patch must be applied first** — zeroes the gain so pin 4 has no
+   fuelling effect regardless of voltage. Apply via Hardware tab → CO Pot.
+2. **Sensor wired to MAF connector pin 4** — see wiring notes per sensor below.
+3. **Teensy tap (optional)** — for active logging, also wire pin 4 to a Teensy
+   analog input. The Teensy reads the sensor type from the ROM table automatically.
+4. **ROM correction loop** — requires a future M68HC11 firmware patch to redirect
+   the CO pot ADC read into a correction table. Not yet implemented.
 
 ---
 
-## Option B — ROM correction tables
+## Supported Sensors
 
-Pin 4 feeds the CO pot ADC in the ECU firmware. With the gain zeroed the
-value is read but ignored. **If** the firmware code that reads this ADC value
-can be identified and redirected, it becomes a real ECU input.
+### Wideband O2
 
-This is speculative until the firmware is disassembled — but the groundwork
-is: the ADC is 8-bit (0–5V maps to 0–255 counts), and the following table
-sizes are viable within available ROM free space:
+All controllers output a linear 0–5V signal. Wire analog output → MAF pin 4.
 
-### ADC resolution
+| Controller | Part | 0V AFR | 5V AFR | Stoich V | Stoich ADC |
+|-----------|------|--------|--------|----------|-----------|
+| Innovate LC-2 | 3877 | 7.35 | 22.39 | 2.43V | 124 |
+| AEM UEGO | 30-0300 | 8.50 | 18.00 | 3.25V | 166 |
+| Zeitronix ZT-3 | ZT-3 | 10.0 | 20.0 | 2.33V | 119 |
 
-| Sensor | Output range | 16-point axis res | 32-point axis res |
-|--------|-------------|-------------------|-------------------|
-| Wideband (Innovate LC-2) | 0V=7.4→5V=22.4 AFR | 0.94 AFR/step | 0.47 AFR/step |
-| Wideband (AEM UEGO) | 0V=8.5→5V=18.0 AFR | 0.59 AFR/step | 0.30 AFR/step |
-| MAP sensor (0–5V abs) | 0–2 bar absolute | 0.31 psi/step | 0.15 psi/step |
-| IAT NTC | -20°C→+100°C | ~7°C/step | ~3.5°C/step |
+**Wiring:** `WB analog out → MAF pin 4`. Also tap to Teensy analog input for logging.
 
-### Table size options
-
-| Table type | Size | Use case |
-|-----------|------|---------|
-| 1D correction curve | 16 bytes | Simple sensor trim (IAT correction) |
-| 1D correction curve | 32 bytes | Higher resolution trim |
-| 2D map (sensor × RPM) | 256 bytes | Wideband feedback or boost vs RPM |
-| 2D map (sensor × load) | 256 bytes | MAP load axis replacement |
-| 2D map (sensor × RPM, 32-col) | 512 bytes | High-res wideband correction |
-
-### ROM free space (266D physical)
-
-Total available (0xFF regions ≥16 bytes): **2195 bytes**
-
-| Block | Size | Notes |
-|-------|------|-------|
-| `0x133E–0x17FF` | 1218 bytes | Largest — fits a 256-byte 2D map + axes |
-| `0x1E87–0x1FFF` | 377 bytes | Second largest |
-| `0x7CC3–0x7DFF` | 317 bytes | Near top of ROM |
-| `0x1270–0x12FF` | 144 bytes | Small — 1D tables only |
-
-A 2D 16×16 correction map (256 bytes) + two 16-byte axes (32 bytes) = **288 bytes**
-— fits comfortably in the `0x133E` block with room to spare.
+**Table encoding:** AFR × 10 stored as byte (e.g. 147 = 14.7 AFR).
 
 ---
 
-## Option C — MAP sensor as load axis replacement
+### MAP Sensor (0–5V absolute)
 
-The most significant possible use: replace the MAF-derived load axis with
-a real MAP sensor reading. The 266D currently derives load from MAF ADC
-counts. A MAP sensor on pin 4 would allow the ECU to use manifold pressure
-directly as the load index — identical in concept to how the AAH/MMS100
-ECU works natively.
+| Sensor | Part | Range | Atm ADC | +1 bar ADC |
+|--------|------|-------|---------|-----------|
+| GM 1-bar | 12569240 | 10–105 kPa | 245 | N/A |
+| GM 2-bar | 16040749 | 10–210 kPa | 116 | 243 |
+| GM 3-bar | 12223861 | 10–315 kPa | 76 | 159 |
+| Bosch 2.5-bar | 0261230036 | 10–250 kPa | 97 | 203 |
 
-This requires firmware-level changes (redirecting which ADC channel feeds
-the load calculation) and is not currently implemented. Documented here
-as a future research direction.
+**Wiring:** `MAP signal → pin 4`. `MAP +5V → switched supply`. `MAP GND → chassis`.
+Tee vacuum port into intake manifold.
+
+**Table encoding:** kPa absolute stored as byte (1 count = 1 kPa).
 
 ---
 
-## Implementation in HachiROM (planned)
+### IAT Sensor — NTC Thermistor
 
-The Hardware tab → MAF SENSOR section will be extended with a
-**Pin 4 Use** dropdown, available when a no-CO-pot sensor is selected:
+Standard Bosch NTC (same family as 7A coolant sensor). Compatible with the
+integrated IAT in 1.8T 5-pin MAF sensors (ATW/AUG/AWM — use MAF pins 1+4).
 
-| Selection | Effect |
-|-----------|--------|
-| Unconnected (default) | CO pot patch applied, pin 4 ignored |
-| Wideband logging | Documents wiring for Teensy ADC tap |
-| MAP sensor logging | Documents wiring for Teensy ADC tap |
-| IAT logging | Documents wiring + NTC curve for Teensy |
-| MAP load axis (experimental) | Placeholder — firmware work required |
+**Circuit:** `5V → 2.2kΩ resistor → MAF pin 4 → NTC → GND`
 
-Logging options require no ROM changes — they are purely hardware/wiring
-guidance. The ROM correction table options will be added as they are
-verified against live ECU behaviour.
+| Temp | ADC | | Temp | ADC |
+|------|-----|-|------|-----|
+| −40°C | 243 | | +40°C | 89 |
+| −20°C | 223 | | +60°C | 54 |
+|   0°C | 186 | | +80°C | 33 |
+| +20°C | 136 | | +100°C | 20 |
+
+**Table encoding:** (temp + 40) as byte. Decode: °C = byte − 40.
+
+---
+
+## ROM Table Layout
+
+Written to `0x1E87–0x1EC8` — confirmed safe block (no code references,
+377 bytes of 0xFF in the stock 266D ROM):
+
+| Offset | Address | Size | Content |
+|--------|---------|------|---------|
+| +0x00 | 0x1E87 | 16 | ADC axis (shared): `[0,17,34,51…255]` |
+| +0x10 | 0x1E97 | 16 | Sensor value axis (AFR×10 / kPa / temp+40) |
+| +0x20 | 0x1EA7 | 16 | Second slot (future) |
+| +0x30 | 0x1EB7 | 16 | Third slot (future) |
+| +0x40 | 0x1EC7 | 1 | Sensor type: `0x00`=none `0x01`=WB `0x02`=MAP `0x03`=IAT `0xFF`=raw |
+| +0x41 | 0x1EC8 | 1 | Sensor subtype index |
+| +0x42 | 0x1EC9 | 311 | Reserved — future correction table |
+
+The Teensy reads `0x1EC7` on startup to know what sensor is fitted and which
+decode table to apply to the analog ADC reading on its input pin.
+
+---
+
+## Availability
+
+| MAF setup | Pin 4 | CO pot patch needed |
+|-----------|-------|---------------------|
+| Stock 7A 4-pin (054 133 471) | CO pot wiper | Yes |
+| 1.8T 4-pin (AEB) | Unused | Yes (to prevent fault) |
+| 1.8T 5-pin (ATW/AWM) — integrated IAT | IAT signal | Yes |
+| AAH V6 3-wire (078 133 471) | Unused | Yes (to prevent fault) |
+
+---
+
+## How to Apply in HachiROM
+
+1. Open your ROM (Hardware tab)
+2. Apply CO Pot patch if not already done
+3. Under **PIN 4 — FREED ADC INPUT**, select your sensor from the dropdown
+4. Click **Apply to ROM…** — writes linearisation table to 0x1E87
+5. Save 27C512 and burn
+
+The Overview tab ROM card will show the detected sensor after applying.

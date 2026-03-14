@@ -1251,7 +1251,7 @@ class OverviewTab(QWidget):
                            "✓ VALID" if cs_ok else "⚠ INVALID — will be corrected on save",
                            "#2dff6e" if cs_ok else "#ffaa00"))
 
-        # Patches
+        # Patches — 7A
         is_7a = variant.part_number in ("893906266D", "893906266B")
         if is_7a:
             maf_state  = hr.detect_maf_patch(rom_snapshot)
@@ -1261,6 +1261,12 @@ class OverviewTab(QWidget):
             maf_colour = "#aaa"    if maf_label == "stock_7a" else "#2dff6e"
             grid.addLayout(row("MAF profile",  maf_label,  maf_colour))
             grid.addLayout(row("CO pot state", cop_state,  cop_colour))
+            # Pin 4 sensor
+            p4 = hr.detect_pin4_patch(rom_snapshot)
+            if p4['state'] == 'patched':
+                grid.addLayout(row("Pin 4 sensor", p4['label'], "#2dff6e"))
+            elif p4['state'] == 'none' and cop_state == 'patched':
+                grid.addLayout(row("Pin 4 sensor", "open (CO pot patched)", "#555"))
 
         # Injection scaler trick — AAH / MMS200 only
         vk = variant.version_key if hasattr(variant, 'version_key') else ''
@@ -1496,7 +1502,7 @@ class HardwareTab(QWidget):
         lbl_p4.setStyleSheet("color:#888; font-size:12px;")
 
         self.combo_pin4 = QComboBox()
-        self.combo_pin4.setFixedWidth(260)
+        self.combo_pin4.setFixedWidth(300)
         self.combo_pin4.setStyleSheet(
             "QComboBox { background:#2a2a2a; color:#e0e0e0; border:1px solid #444; "
             "border-radius:3px; padding:4px 8px; font-size:12px; }"
@@ -1504,15 +1510,18 @@ class HardwareTab(QWidget):
             "QComboBox QAbstractItemView { background:#2a2a2a; color:#e0e0e0; "
             "selection-background-color:#1a4a1a; }")
 
-        self._pin4_options = [
-            ("unconnected",   "Unconnected (CO pot patch, pin 4 open)"),
-            ("wideband",      "Wideband O2 — 0–5V analog (Innovate/AEM)"),
-            ("map_sensor",    "MAP sensor — 0–5V absolute pressure"),
-            ("iat",           "IAT sensor — NTC thermistor (e.g. 1.8T integrated)"),
-            ("raw_log",       "Raw ADC logging — Teensy data capture"),
-        ]
-        for key, label in self._pin4_options:
-            self.combo_pin4.addItem(label, key)
+        # Build options from sensor tables
+        self.combo_pin4.addItem("Unconnected (CO pot patch, pin 4 open)", "unconnected")
+        self.combo_pin4.insertSeparator(1)
+        for key, tbl in hr.PIN4_WIDEBAND_TABLES.items():
+            self.combo_pin4.addItem(f"Wideband — {tbl['label']}", f"wb:{key}")
+        self.combo_pin4.insertSeparator(self.combo_pin4.count())
+        for key, tbl in hr.PIN4_MAP_TABLES.items():
+            self.combo_pin4.addItem(f"MAP — {tbl['label']}", f"map:{key}")
+        self.combo_pin4.insertSeparator(self.combo_pin4.count())
+        self.combo_pin4.addItem("IAT — Bosch NTC (2.2kΩ pull-up)", "iat:bosch_ntc")
+        self.combo_pin4.insertSeparator(self.combo_pin4.count())
+        self.combo_pin4.addItem("Raw ADC — Teensy logging only", "raw_log")
 
         self.combo_pin4.currentIndexChanged.connect(self._on_pin4_changed)
 
@@ -1529,6 +1538,27 @@ class HardwareTab(QWidget):
             "font-size:11px; color:#888; background:#1a1a1a; "
             "border-radius:4px; padding:8px; margin-top:4px;")
         layout.addWidget(self.lbl_pin4_info)
+
+        # Current ROM state + Apply button row
+        pin4_apply_row = QHBoxLayout()
+        pin4_apply_row.setSpacing(12)
+
+        self.lbl_pin4_state = QLabel("ROM state: —")
+        self.lbl_pin4_state.setStyleSheet("color:#666; font-size:11px;")
+
+        self.btn_pin4 = QPushButton("Apply to ROM…")
+        self.btn_pin4.setFixedWidth(160)
+        self.btn_pin4.setStyleSheet(
+            "QPushButton { background:#1a2a1a; color:#fff; border:none; "
+            "border-radius:3px; padding:5px 12px; font-size:12px; }"
+            "QPushButton:hover { background:#253525; }")
+        self.btn_pin4.clicked.connect(self._open_pin4)
+
+        pin4_apply_row.addWidget(self.lbl_pin4_state, 1)
+        pin4_apply_row.addWidget(self.btn_pin4)
+        layout.addLayout(pin4_apply_row)
+
+        self._refresh_pin4_state()
         self._on_pin4_changed(0)   # populate initial text
 
         layout.addWidget(self._divider())
@@ -1616,65 +1646,151 @@ class HardwareTab(QWidget):
         return sep
 
     def _on_pin4_changed(self, index: int):
-        """Update the pin 4 info panel with wiring notes for the selected use."""
-        key = self.combo_pin4.itemData(index) if hasattr(self, 'combo_pin4') else 'unconnected'
+        """Update the pin 4 info panel with wiring notes for the selected sensor."""
+        if not hasattr(self, 'combo_pin4'):
+            return
+        key = self.combo_pin4.itemData(index)
+        if not key:
+            self.lbl_pin4_info.setText("")
+            return
 
-        notes = {
-            'unconnected': (
+        V_PER_COUNT = 5.0 / 255.0
+
+        if key == "unconnected":
+            txt = (
                 "<b>No connection required.</b><br>"
                 "CO pot patch must be applied (Hardware tab → CO Pot). "
-                "Pin 4 floats — the ECU reads it but gain=0 so no fuelling effect. "
-                "No fault 00521 will fire."
-            ),
-            'wideband': (
-                "<b>Wideband O2 — analog 0–5V output</b><br>"
-                "Connect wideband controller analog output to MAF pin 4. "
-                "Innovate LC-2: 0V=7.4 AFR → 5V=22.4 AFR (stoich ~2.4V). "
-                "AEM UEGO: 0V=8.5 AFR → 5V=18.0 AFR (stoich ~3.3V).<br><br>"
-                "<b>Wiring:</b> Wideband analog out → MAF connector pin 4.<br>"
-                "<b>Teensy:</b> Also tap pin 4 to a Teensy analog input for logging. "
-                "16-point axis gives ~0.6–0.9 AFR/step resolution.<br>"
-                "<b>ROM:</b> CO pot patch required. No ROM correction table yet — "
-                "data logging only via Teensy."
-            ),
-            'map_sensor': (
-                "<b>MAP sensor — 0–5V absolute pressure</b><br>"
-                "Use a 1-bar or 2-bar absolute MAP sensor "
-                "(e.g. Bosch 0261230036, GM 3 bar, or similar 0–5V output).<br><br>"
-                "<b>Wiring:</b> MAP sensor signal → MAF connector pin 4. "
-                "MAP sensor +5V → ignition-switched 5V supply. "
-                "MAP sensor GND → chassis ground.<br>"
-                "<b>Vacuum port:</b> Tee into intake manifold vacuum line.<br>"
-                "<b>Teensy:</b> Tap pin 4 to Teensy analog input. "
-                "1 bar abs = ~1V (ADC 51), 2 bar abs = ~2.5V (ADC 128).<br>"
-                "<b>ROM:</b> CO pot patch required. MAP load axis replacement "
-                "is a future research item — logging only for now."
-            ),
-            'iat': (
-                "<b>IAT sensor — NTC thermistor</b><br>"
-                "The Bosch 1.8T 5-pin MAF (ATW/AUG/AWM) has an integrated IAT "
-                "on pins 1 (signal) and 4 (5V reference) — currently left open "
-                "on the 7A ECU. If using a standalone NTC IAT sensor:<br><br>"
-                "<b>Wiring:</b> NTC one leg → MAF connector pin 4. "
-                "NTC other leg → 5V via 2.2kΩ pull-up resistor. "
-                "Result: voltage divider gives 0–5V proportional to temperature.<br>"
-                "<b>Curve:</b> Same NTC family as coolant sensor — "
-                "~4.8V at -20°C, ~2.5V at +20°C, ~0.6V at +80°C.<br>"
-                "<b>Teensy:</b> Tap pin 4 for logging. 16-point axis ≈ 7°C/step.<br>"
-                "<b>ROM:</b> CO pot patch required. IAT correction table planned."
-            ),
-            'raw_log': (
-                "<b>Raw ADC logging — Teensy data capture</b><br>"
-                "Tap MAF connector pin 4 to a Teensy analog input. "
-                "The ECU ADC still reads the pin (gain=0, no effect). "
-                "Connect any 0–5V sensor and log the raw ADC value alongside "
-                "map slot, RPM, and other Teensy channels.<br><br>"
-                "<b>Wiring:</b> Sensor signal → MAF connector pin 4 AND → Teensy analog in.<br>"
-                "<b>Use for:</b> Prototyping a new sensor before writing a ROM correction table."
-            ),
-        }
+                "Pin 4 floats — ECU reads it but gain=0, no fuelling effect. "
+                "Fault 00521 will not fire."
+            )
+        elif key.startswith("wb:"):
+            tbl = hr.PIN4_WIDEBAND_TABLES[key[3:]]
+            txt = (
+                f"<b>{tbl['label']}</b>  "
+                f"<span style=\'color:#555\'>{tbl['part']}</span><br>"
+                f"Range: {tbl['afr_at_0v']:.1f} AFR (0V) → {tbl['afr_at_5v']:.1f} AFR (5V)<br>"
+                f"Stoich (14.7 AFR): {tbl['stoich_v']:.2f}V = ADC {tbl['stoich_adc']}<br>"
+                f"ADC axis: {hr.PIN4_ADC_AXIS}<br>"
+                f"AFR axis: {[round(a,1) for a in tbl['afr_axis']]}<br><br>"
+                f"<b>Wiring:</b> Wideband analog out → MAF pin 4.<br>"
+                f"<b>Teensy:</b> Tap same wire to Teensy analog input for logging.<br>"
+                f"<b>ROM:</b> CO pot patch required. Correction table planned — logging only."
+            )
+        elif key.startswith("map:"):
+            tbl = hr.PIN4_MAP_TABLES[key[4:]]
+            b1  = tbl.get("boost_1bar")
+            boost_txt = (f"  +1 bar boost @ ADC {b1} ({b1*V_PER_COUNT:.2f}V)"
+                         if b1 else "  Atmospheric range only.")
+            txt = (
+                f"<b>{tbl['label']}</b>  "
+                f"<span style=\'color:#555\'>{tbl['part']}</span><br>"
+                f"Range: {tbl['kpa_at_0v']:.0f}–{tbl['kpa_at_5v']:.0f} kPa abs "
+                f"({tbl['range_bar']:.1f} bar)<br>"
+                f"Atmospheric (101 kPa): ADC {tbl['atm_adc']} "
+                f"({tbl['atm_adc']*V_PER_COUNT:.2f}V)<br>"
+                f"{boost_txt}<br><br>"
+                f"<b>Wiring:</b> MAP signal → pin 4. MAP +5V → switched supply. MAP GND → chassis.<br>"
+                f"<b>Vacuum port:</b> Tee into intake manifold.<br>"
+                f"<b>ROM:</b> CO pot patch required. MAP load axis replacement is future research."
+            )
+        elif key.startswith("iat:"):
+            tbl = hr.PIN4_IAT_TABLE["bosch_ntc"]
+            txt = (
+                f"<b>{tbl['label']}</b>  "
+                f"<span style=\'color:#555\'>{tbl['part']}</span><br>"
+                f"Circuit: 5V → {tbl['pullup_ohm']}Ω → MAF pin 4 → NTC → GND<br>"
+                f"Temp axis (°C): {tbl['temp_axis']}<br>"
+                f"ADC at temp:    {tbl['adc_axis']}<br>"
+                f"Decoding: °C = stored_byte − 40<br><br>"
+                f"<b>Wiring:</b> 5V → 2.2kΩ → MAF pin 4 → NTC → GND.<br>"
+                f"Compatible with 1.8T 5-pin integrated IAT (pins 1+4).<br>"
+                f"<b>ROM:</b> CO pot patch required. IAT correction table planned."
+            )
+        elif key == "raw_log":
+            txt = (
+                "<b>Raw ADC — Teensy logging</b><br>"
+                "Connect any 0–5V sensor to MAF pin 4 and tap to a Teensy analog input. "
+                "ECU reads pin 4 (gain=0, ignored). Teensy logs raw 0–255 ADC value "
+                "alongside map slot and RPM.<br><br>"
+                "<b>ROM:</b> CO pot patch required. No other ROM changes needed for logging."
+            )
+        else:
+            txt = ""
 
-        self.lbl_pin4_info.setText(notes.get(key, ""))
+        self.lbl_pin4_info.setText(txt)
+
+
+    def _refresh_pin4_state(self):
+        """Update pin4 state label from current ROM."""
+        if not self._is_7a or not hasattr(self, 'lbl_pin4_state'):
+            return
+        det = hr.detect_pin4_patch(self._rom)
+        if det['state'] == 'none':
+            self.lbl_pin4_state.setText("ROM state: no sensor table written")
+            self.lbl_pin4_state.setStyleSheet("color:#555; font-size:11px;")
+        elif det['state'] == 'patched':
+            self.lbl_pin4_state.setText(f"ROM state: ✓ {det['label']}")
+            self.lbl_pin4_state.setStyleSheet("color:#2dff6e; font-size:11px;")
+        else:
+            self.lbl_pin4_state.setText("ROM state: unknown")
+            self.lbl_pin4_state.setStyleSheet("color:#ffaa00; font-size:11px;")
+
+    def _open_pin4(self):
+        """Apply the selected pin 4 sensor table to the ROM."""
+        from PyQt5.QtWidgets import QMessageBox
+        key = self.combo_pin4.currentData()
+        if not key or key == "unconnected":
+            # Clear the table
+            try:
+                patched = hr.apply_pin4_patch(self._rom, hr.PIN4_TYPE_NONE)
+                self.patch_requested.emit("pin4", patched)
+            except ValueError as e:
+                QMessageBox.warning(self, "Pin 4", str(e))
+            return
+
+        # Map combo key → sensor_type + subtype_key
+        if key.startswith("wb:"):
+            sensor_type = hr.PIN4_TYPE_WIDEBAND
+            subtype_key = key[3:]
+            label = hr.PIN4_WIDEBAND_TABLES[subtype_key]['label']
+        elif key.startswith("map:"):
+            sensor_type = hr.PIN4_TYPE_MAP
+            subtype_key = key[4:]
+            label = hr.PIN4_MAP_TABLES[subtype_key]['label']
+        elif key.startswith("iat:"):
+            sensor_type = hr.PIN4_TYPE_IAT
+            subtype_key = "bosch_ntc"
+            label = hr.PIN4_IAT_TABLE['bosch_ntc']['label']
+        elif key == "raw_log":
+            sensor_type = hr.PIN4_TYPE_RAW
+            subtype_key = ""
+            label = "Raw ADC logging"
+        else:
+            return
+
+        # Check CO pot patch first
+        if self._rom[0x0779] != 0x00:
+            QMessageBox.warning(self, "Pin 4",
+                "CO pot patch must be applied before writing a pin 4 sensor table.\n\n"
+                "Apply CO Pot patch first (CO POT section above), then retry.")
+            return
+
+        msg = (
+            f"Write {label} linearisation table to ROM?\n\n"
+            f"Table location: 0x1E87–0x1EC8 (safe free block)\n"
+            f"This documents the sensor fitted for Teensy logging.\n\n"
+            f"The Teensy can read the sensor type and decode pin 4 ADC values\n"
+            f"against this table without any extra wiring.\n\n"
+            f"Note: ROM correction loop requires a future firmware patch.\n"
+            f"Currently provides sensor documentation and Teensy logging only.")
+        reply = QMessageBox.question(self, "Write Pin 4 Sensor Table", msg,
+                                     QMessageBox.Ok | QMessageBox.Cancel)
+        if reply == QMessageBox.Ok:
+            try:
+                patched = hr.apply_pin4_patch(self._rom, sensor_type, subtype_key)
+                self.patch_requested.emit("pin4", patched)
+            except ValueError as e:
+                QMessageBox.critical(self, "Pin 4 Error", str(e))
 
     def _on_scalar_changed(self):
         """Propagate scalar field edits up to MainWindow."""
@@ -1737,6 +1853,7 @@ class HardwareTab(QWidget):
             self.lbl_maf.setStyleSheet(f"color:{maf_colour}; font-size:12px;")
             self.lbl_cop.setText(f"Current state:  {cop_state}")
             self.lbl_cop.setStyleSheet(f"color:{cop_colour}; font-size:12px;")
+        self._refresh_pin4_state()
         if self.lbl_inj is not None and self._variant:
             vk = self._variant.version_key
             inj_state = hr.detect_injection_scaler_trick(rom_data, variant_key=vk)
@@ -2799,8 +2916,13 @@ class MainWindow(QMainWindow):
         elif patch_type == "copot":
             self._apply_copot_patch_from_dialog(dlg)
         elif patch_type == "scalar":
-            # Scalar field edited — just trigger a ROM rebuild/refresh
             self._on_rom_changed()
+        elif patch_type == "pin4":
+            # dlg is the patched bytes directly
+            self._rom_snapshot = bytes(dlg)
+            self._on_rom_changed()
+            if self._hardware_tab:
+                self._hardware_tab.update_rom(self._rom_snapshot)
         elif patch_type == "inj_trick":
             patched, halve = dlg
             self._rom_snapshot = patched

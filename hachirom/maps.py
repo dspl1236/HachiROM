@@ -503,3 +503,364 @@ def apply_injection_scaler_trick(data: bytes, halve: bool = True) -> bytes:
         rom[FUEL_MAP_ADDR + i] = val
 
     return bytes(rom)
+
+
+# ---------------------------------------------------------------------------
+# Pin 4 sensor definitions — freed ADC input
+# ---------------------------------------------------------------------------
+#
+# When the CO pot patch is applied (or a no-CO-pot sensor is fitted),
+# ECU pin 4 becomes a free 0–5V ADC input sampled every cycle.
+# The following tables define the transfer functions for supported sensors.
+#
+# ADC encoding: 8-bit, 0V=0, 5V=255, resolution = 5/255 = 0.01961 V/count
+#
+# ROM correction table layout (when implemented):
+#   Axis table  : 16 bytes — ADC breakpoints (evenly spaced 0–255)
+#   Value table : 16 bytes — decoded values at each breakpoint
+#   Total       : 32 bytes per 1D table
+#   Best ROM location: 0x133E–0x17FF (1218 bytes free in 266D stock)
+#
+# Requirements to use pin 4 as a sensor input:
+#   1. CO pot patch MUST be applied (gain=0, thresholds 0x00/0xFF)
+#   2. Sensor fitted to MAF connector pin 4
+#   3. For logging: Teensy analog input tapped on the same wire
+#   4. For ROM correction: firmware patch required (future — not yet implemented)
+# ---------------------------------------------------------------------------
+
+# Standard 16-point ADC axis — evenly spaced, used by all sensor tables
+PIN4_ADC_AXIS = [0, 17, 34, 51, 68, 85, 102, 119, 136, 153, 170, 187, 204, 221, 238, 255]
+
+# ── Wideband O2 controllers ──────────────────────────────────────────────────
+# Transfer function: linear 0–5V output
+# Encoding: AFR * 10 stored as byte (e.g. 147 = 14.7 AFR)
+# Range clipped to 0–255 (max storable AFR = 25.5)
+
+PIN4_WIDEBAND_TABLES = {
+    "innovate_lc2": {
+        "label":       "Innovate LC-2 (gasoline)",
+        "part":        "Innovate 3877",
+        "afr_at_0v":   7.35,
+        "afr_at_5v":   22.39,
+        "stoich_adc":  124,   # 14.7 AFR @ 2.43V
+        "stoich_v":    2.43,
+        "afr_axis":    [7.4, 8.3, 9.4, 10.4, 11.4, 12.4, 13.4, 14.4,
+                        15.4, 16.4, 17.4, 18.4, 19.4, 20.4, 21.4, 22.4],
+        # Stored as AFR*10 truncated to byte
+        "table_bytes": [74, 83, 94, 104, 114, 124, 134, 144,
+                        154, 164, 174, 184, 194, 204, 214, 224],
+        "notes":       "Linear 0-5V. Wire: WB controller analog out → pin 4. "
+                       "Also tap to Teensy A-pin for logging.",
+    },
+    "aem_uego": {
+        "label":       "AEM UEGO 30-0300 (gasoline)",
+        "part":        "AEM 30-0300",
+        "afr_at_0v":   8.50,
+        "afr_at_5v":   18.00,
+        "stoich_adc":  166,   # 14.7 AFR @ 3.25V
+        "stoich_v":    3.25,
+        "afr_axis":    [8.5, 9.1, 9.8, 10.4, 11.0, 11.7, 12.3, 12.9,
+                        13.6, 14.2, 14.8, 15.5, 16.1, 16.7, 17.4, 18.0],
+        "table_bytes": [85, 91, 98, 104, 110, 117, 123, 129,
+                        136, 142, 148, 155, 161, 167, 174, 180],
+        "notes":       "Linear 0-5V. Wire: WB controller analog out → pin 4.",
+    },
+    "zeitronix_zt3": {
+        "label":       "Zeitronix ZT-3",
+        "part":        "Zeitronix ZT-3",
+        "afr_at_0v":   10.0,
+        "afr_at_5v":   20.0,
+        "stoich_adc":  119,   # 14.7 AFR @ 2.33V
+        "stoich_v":    2.33,
+        "afr_axis":    [10.0, 10.7, 11.3, 12.0, 12.7, 13.3, 14.0, 14.7,
+                        15.3, 16.0, 16.7, 17.3, 18.0, 18.7, 19.3, 20.0],
+        "table_bytes": [100, 107, 113, 120, 127, 133, 140, 147,
+                        153, 160, 167, 173, 180, 187, 193, 200],
+        "notes":       "Linear 0-5V. Wire: WB controller analog out → pin 4.",
+    },
+}
+
+# ── MAP sensors ───────────────────────────────────────────────────────────────
+# Transfer function: linear 0–5V absolute pressure output
+# Encoding: kPa absolute stored as byte (1 byte = 1 kPa, range 0–255 kPa)
+
+PIN4_MAP_TABLES = {
+    "gm_1bar": {
+        "label":       "GM 1-bar absolute (12569240)",
+        "part":        "GM 12569240 / ACDelco 213-796",
+        "kpa_at_0v":   10.0,
+        "kpa_at_5v":   105.0,
+        "range_bar":   1.0,
+        "atm_adc":     245,   # 101.3 kPa @ 4.80V
+        "boost_1bar":  None,  # exceeds sensor range
+        "kpa_axis":    [10.0, 16.3, 22.7, 29.0, 35.3, 41.7, 48.0, 54.3,
+                        60.7, 67.0, 73.3, 79.7, 86.0, 92.3, 98.7, 105.0],
+        "table_bytes": [10, 16, 23, 29, 35, 42, 48, 54,
+                        61, 67, 73, 80, 86, 92, 99, 105],
+        "notes":       "NA only. Full-range vacuum to atmospheric. "
+                       "Wire: MAP signal → pin 4, +5V supply, GND. "
+                       "Vacuum port: tee into intake manifold.",
+    },
+    "gm_2bar": {
+        "label":       "GM 2-bar absolute (16040749)",
+        "part":        "GM 16040749 / ACDelco 213-4514",
+        "kpa_at_0v":   10.0,
+        "kpa_at_5v":   210.0,
+        "range_bar":   2.0,
+        "atm_adc":     116,   # 101.3 kPa @ 2.27V
+        "boost_1bar":  243,   # 201.3 kPa @ 4.76V
+        "kpa_axis":    [10.0, 23.3, 36.7, 50.0, 63.3, 76.7, 90.0, 103.3,
+                        116.7, 130.0, 143.3, 156.7, 170.0, 183.3, 196.7, 210.0],
+        "table_bytes": [10, 23, 37, 50, 63, 77, 90, 103,
+                        117, 130, 143, 157, 170, 183, 197, 210],
+        "notes":       "NA and mild boost to 1 bar. "
+                       "Wire: MAP signal → pin 4, +5V supply, GND. "
+                       "Vacuum port: tee into intake manifold.",
+    },
+    "gm_3bar": {
+        "label":       "GM 3-bar absolute (12223861)",
+        "part":        "GM 12223861 / ACDelco 213-2932",
+        "kpa_at_0v":   10.0,
+        "kpa_at_5v":   315.0,
+        "range_bar":   3.0,
+        "atm_adc":     76,    # 101.3 kPa @ 1.49V
+        "boost_1bar":  159,   # 201.3 kPa @ 3.12V
+        "kpa_axis":    [10.0, 30.3, 50.7, 71.0, 91.3, 111.7, 132.0, 152.3,
+                        172.7, 193.0, 213.3, 233.7, 254.0, 274.3, 294.7, 315.0],
+        "table_bytes": [10, 30, 51, 71, 91, 112, 132, 152,
+                        173, 193, 213, 234, 254, 255, 255, 255],
+        "notes":       "High-boost builds to 2 bar. "
+                       "Wire: MAP signal → pin 4, +5V supply, GND.",
+    },
+    "bosch_2bar5": {
+        "label":       "Bosch 2.5-bar (0261230036)",
+        "part":        "Bosch 0261230036",
+        "kpa_at_0v":   10.0,
+        "kpa_at_5v":   250.0,
+        "range_bar":   2.5,
+        "atm_adc":     97,    # 101.3 kPa @ 1.90V
+        "boost_1bar":  203,   # 201.3 kPa @ 3.98V
+        "kpa_axis":    [10.0, 26.0, 42.0, 58.0, 74.0, 90.0, 106.0, 122.0,
+                        138.0, 154.0, 170.0, 186.0, 202.0, 218.0, 234.0, 250.0],
+        "table_bytes": [10, 26, 42, 58, 74, 90, 106, 122,
+                        138, 154, 170, 186, 202, 218, 234, 250],
+        "notes":       "Common VAG part. NA to 1.5 bar boost. "
+                       "Wire: MAP signal → pin 4, +5V supply, GND.",
+    },
+}
+
+# ── IAT NTC thermistor ────────────────────────────────────────────────────────
+# Standard Bosch NTC B57861-S (same family as 7A coolant temp sensor)
+# Circuit: 5V — 2.2kΩ — pin4 — NTC — GND
+# Encoding: signed byte, 1 count = 1°C, offset 40 (byte 40 = 0°C, byte 80 = 40°C)
+
+PIN4_IAT_TABLE = {
+    "bosch_ntc": {
+        "label":       "Bosch NTC IAT (B57861-S family)",
+        "part":        "Bosch 0280130039 or equivalent",
+        "pullup_ohm":  2200,
+        "pullup_v":    5.0,
+        # ADC values at each temperature breakpoint
+        "temp_axis":   [-40, -30, -20, -10,  0,  10,  20,  30,
+                          40,  50,  60,  70, 80,  90, 100, 110],
+        "adc_axis":    [243, 235, 223, 207, 186, 161, 136, 111,
+                          89,  70,  54,  42,  33,  25,  20,  16],
+        # Stored as (temp + 40) so -40°C=0, 0°C=40, 100°C=140 — fits in byte
+        "table_bytes": [  0,  10,  20,  30,  40,  50,  60,  70,
+                          80,  90, 100, 110, 120, 130, 140, 150],
+        "notes":       "Wire: 5V → 2.2kΩ resistor → pin 4 → NTC → GND. "
+                       "Decoding: °C = table_value - 40. "
+                       "Compatible with 1.8T 5-pin integrated IAT (pins 1+4).",
+    },
+}
+
+# ── Sensor key → table lookup ─────────────────────────────────────────────────
+PIN4_SENSOR_TABLES = {
+    **{k: {"type": "wideband", **v} for k, v in PIN4_WIDEBAND_TABLES.items()},
+    **{k: {"type": "map",      **v} for k, v in PIN4_MAP_TABLES.items()},
+    "bosch_ntc": {"type": "iat", **PIN4_IAT_TABLE["bosch_ntc"]},
+}
+
+PIN4_ADC_AXIS_CONST = PIN4_ADC_AXIS   # alias for clarity in GUI code
+
+
+# ---------------------------------------------------------------------------
+# Pin 4 sensor table patch — writes linearisation tables into safe ROM space
+# ---------------------------------------------------------------------------
+#
+# Sensor table block at 0x1E87–0x1FFF (377 bytes, confirmed safe in 266D):
+#   0x1E87  [16]  Shared ADC axis (evenly spaced 0–255)
+#   0x1E97  [16]  Active sensor value axis (AFR*10 / kPa / temp+40)
+#   0x1EA7  [16]  Second sensor slot (optional, future use)
+#   0x1EB7  [16]  Third sensor slot
+#   0x1EC7  [1]   Sensor type: 0x00=none 0x01=wideband 0x02=map 0x03=iat 0xFF=raw
+#   0x1EC8  [1]   Sensor subtype index (0=first entry in type dict)
+#   0x1EC9–0x1FFF Reserved for future correction table
+#
+# Requirements:
+#   1. CO pot patch MUST be applied first (gain=0, thresholds 0x00/0xFF)
+#   2. Sensor wired to MAF connector pin 4
+#   3. For ECU correction: firmware patch required (future — not yet implemented)
+#   4. For Teensy logging: tap pin 4 physically, read table from ROM bus
+#
+# The Teensy can read the sensor type and table bytes directly from the emulated
+# ROM image — it knows the sensor fitted without any extra wiring.
+# ---------------------------------------------------------------------------
+
+PIN4_TABLE_BASE        = 0x1E87
+PIN4_ADC_AXIS_OFFSET   = 0x00   # 16 bytes — shared ADC axis
+PIN4_VAL_AXIS_OFFSET   = 0x10   # 16 bytes — sensor value axis (primary slot)
+PIN4_VAL2_AXIS_OFFSET  = 0x20   # 16 bytes — second slot (future)
+PIN4_VAL3_AXIS_OFFSET  = 0x30   # 16 bytes — third slot (future)
+PIN4_CONFIG_OFFSET     = 0x40   # 1 byte  — sensor type
+PIN4_SUBTYPE_OFFSET    = 0x41   # 1 byte  — sensor subtype
+
+PIN4_TYPE_NONE      = 0x00
+PIN4_TYPE_WIDEBAND  = 0x01
+PIN4_TYPE_MAP       = 0x02
+PIN4_TYPE_IAT       = 0x03
+PIN4_TYPE_RAW       = 0xFF
+
+_PIN4_SUBTYPE_KEYS = {
+    PIN4_TYPE_WIDEBAND: list(PIN4_WIDEBAND_TABLES.keys()),
+    PIN4_TYPE_MAP:      list(PIN4_MAP_TABLES.keys()),
+    PIN4_TYPE_IAT:      ["bosch_ntc"],
+}
+
+
+def detect_pin4_patch(data: bytes) -> dict:
+    """
+    Detect whether a pin 4 sensor table has been written to the ROM.
+
+    Returns a dict:
+      {
+        'state':    'none' | 'patched' | 'unknown',
+        'type':     PIN4_TYPE_* constant,
+        'type_name': 'wideband' | 'map' | 'iat' | 'raw' | 'none',
+        'subtype':  subtype key string or None,
+        'label':    human-readable sensor label,
+        'adc_axis': list[int] or None,
+        'val_axis': list[int] or None,
+      }
+    """
+    base = PIN4_TABLE_BASE
+    if len(data) < base + PIN4_SUBTYPE_OFFSET + 1:
+        return {'state': 'unknown', 'type': PIN4_TYPE_NONE,
+                'type_name': 'unknown', 'subtype': None,
+                'label': 'unknown', 'adc_axis': None, 'val_axis': None}
+
+    sensor_type    = data[base + PIN4_CONFIG_OFFSET]
+    sensor_subtype = data[base + PIN4_SUBTYPE_OFFSET]
+
+    # Check if ADC axis has been written (not all 0xFF)
+    adc_bytes = list(data[base + PIN4_ADC_AXIS_OFFSET:
+                           base + PIN4_ADC_AXIS_OFFSET + 16])
+    val_bytes = list(data[base + PIN4_VAL_AXIS_OFFSET:
+                           base + PIN4_VAL_AXIS_OFFSET + 16])
+    has_data  = not all(b == 0xFF for b in adc_bytes)
+
+    if not has_data or sensor_type == PIN4_TYPE_NONE:
+        return {'state': 'none', 'type': PIN4_TYPE_NONE,
+                'type_name': 'none', 'subtype': None,
+                'label': 'No sensor (pin 4 open)',
+                'adc_axis': None, 'val_axis': None}
+
+    type_names = {
+        PIN4_TYPE_WIDEBAND: 'wideband',
+        PIN4_TYPE_MAP:      'map',
+        PIN4_TYPE_IAT:      'iat',
+        PIN4_TYPE_RAW:      'raw',
+    }
+    type_name = type_names.get(sensor_type, 'unknown')
+
+    # Resolve subtype label
+    subtype_key = None
+    label = type_name
+    subtype_list = _PIN4_SUBTYPE_KEYS.get(sensor_type, [])
+    if sensor_subtype < len(subtype_list):
+        subtype_key = subtype_list[sensor_subtype]
+        if sensor_type == PIN4_TYPE_WIDEBAND:
+            label = PIN4_WIDEBAND_TABLES[subtype_key]['label']
+        elif sensor_type == PIN4_TYPE_MAP:
+            label = PIN4_MAP_TABLES[subtype_key]['label']
+        elif sensor_type == PIN4_TYPE_IAT:
+            label = PIN4_IAT_TABLE['bosch_ntc']['label']
+
+    return {
+        'state':     'patched',
+        'type':      sensor_type,
+        'type_name': type_name,
+        'subtype':   subtype_key,
+        'label':     label,
+        'adc_axis':  adc_bytes if has_data else None,
+        'val_axis':  val_bytes if has_data else None,
+    }
+
+
+def apply_pin4_patch(data: bytes, sensor_type: int, subtype_key: str = '') -> bytes:
+    """
+    Write a sensor linearisation table into the safe ROM block at 0x1E87.
+
+    Parameters
+    ----------
+    data         : raw 32 768-byte 266D ROM (CO pot patch MUST already be applied)
+    sensor_type  : PIN4_TYPE_* constant
+    subtype_key  : key into the appropriate sensor table dict
+
+    Returns new bytes with the table written.
+    Raises ValueError if CO pot patch not applied, or bad arguments.
+    """
+    if len(data) < PIN4_TABLE_BASE + PIN4_SUBTYPE_OFFSET + 1:
+        raise ValueError("ROM too short for pin 4 patch")
+
+    # Require CO pot patch to be applied first
+    if data[0x0779] != 0x00:
+        raise ValueError(
+            "CO pot patch must be applied before writing pin 4 sensor table. "
+            "Apply CO pot patch first (Hardware tab → CO Pot).")
+
+    rom = bytearray(data)
+    base = PIN4_TABLE_BASE
+
+    if sensor_type == PIN4_TYPE_NONE or sensor_type == PIN4_TYPE_RAW:
+        # Clear the table back to 0xFF
+        for i in range(0x42):
+            rom[base + i] = 0xFF
+        rom[base + PIN4_CONFIG_OFFSET] = (
+            PIN4_TYPE_RAW if sensor_type == PIN4_TYPE_RAW else PIN4_TYPE_NONE)
+        return bytes(rom)
+
+    # Write shared ADC axis
+    for i, v in enumerate(PIN4_ADC_AXIS):
+        rom[base + PIN4_ADC_AXIS_OFFSET + i] = v
+
+    # Write sensor value axis and config
+    subtype_idx = 0
+    if sensor_type == PIN4_TYPE_WIDEBAND:
+        if subtype_key not in PIN4_WIDEBAND_TABLES:
+            raise ValueError(f"Unknown wideband subtype: {subtype_key}")
+        tbl = PIN4_WIDEBAND_TABLES[subtype_key]
+        val_bytes = tbl['table_bytes']
+        subtype_idx = list(PIN4_WIDEBAND_TABLES.keys()).index(subtype_key)
+
+    elif sensor_type == PIN4_TYPE_MAP:
+        if subtype_key not in PIN4_MAP_TABLES:
+            raise ValueError(f"Unknown MAP sensor subtype: {subtype_key}")
+        tbl = PIN4_MAP_TABLES[subtype_key]
+        val_bytes = tbl['table_bytes']
+        subtype_idx = list(PIN4_MAP_TABLES.keys()).index(subtype_key)
+
+    elif sensor_type == PIN4_TYPE_IAT:
+        tbl = PIN4_IAT_TABLE['bosch_ntc']
+        val_bytes = tbl['table_bytes']
+        subtype_idx = 0
+    else:
+        raise ValueError(f"Unknown sensor type: {sensor_type:#04x}")
+
+    for i, v in enumerate(val_bytes):
+        rom[base + PIN4_VAL_AXIS_OFFSET + i] = v
+
+    rom[base + PIN4_CONFIG_OFFSET] = sensor_type
+    rom[base + PIN4_SUBTYPE_OFFSET] = subtype_idx
+
+    return bytes(rom)
