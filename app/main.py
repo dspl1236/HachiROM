@@ -1041,13 +1041,13 @@ class InjectorCalcWidget(QWidget):
                 c = "#ff6666" if pct > 2 else "#2dff6e" if pct < -2 else "#ffaa00"
             return f"<span style='color:{c}'>{pct:+.1f}%</span>"
 
+        ok_short = "<span style='color:#ff6666'>SHORT</span>" if headroom_pct < -2 else "<span style='color:#2dff6e'>OK</span>"
         lines = [
             f"<b>Actual flow @ {psi:.1f} psi ({bar:.2f} bar):</b>  {actual:.1f} cc/min",
             f"<b>Stock Hitachi @ 4 bar:</b>  {stock_actual:.1f} cc/min  "
             f"({_col(delta_pct)} vs stock)",
             f"<b>Engine {disp:.0f}cc needs:</b>  {needed:.1f} cc/min  "
-            f"({'<span style=\"color:#ff6666\">SHORT</span>' if headroom_pct < -2 else '<span style=\"color:#2dff6e\">OK</span>'}  "
-            f"{_col(headroom_pct)})",
+            f"({ok_short}  {_col(headroom_pct)})",
             f"<b>FPR for stock flow:</b>  {p_stock:.2f} bar  ({p_stock * self.PSI_PER_BAR:.1f} psi)",
             f"<b>FPR for {disp:.0f}cc:</b>  {p_disp:.2f} bar  ({p_disp * self.PSI_PER_BAR:.1f} psi)",
         ]
