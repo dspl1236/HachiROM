@@ -8,4 +8,5 @@ build/
 .venv/
 venv/
 *.bin
+!roms/*.bin
 !roms/.gitkeep
