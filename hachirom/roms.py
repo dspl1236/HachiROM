@@ -437,7 +437,11 @@ ROM_266D = ROMVariant(
     description="Audi 90 / Coupe Quattro 2.3 20v NF/7A — late 4-connector ECU",
     maps=_MAPS_266D,
     checksum=CHECKSUM_PARAMS["266D"],
-    known_crc32s=[0x609f1f40, 0x4152e167],
+    known_crc32s=[
+        0x609f1f40,   # AAH_MMS100 cross-detection (legacy)
+        0x4152e167,   # 893906266D_MMS05C_physical.bin — physical EPROM read
+        0x9babe5c5,   # 034_-_893906266D_Stock.034 unscrambled to flat 32KB bin
+    ],
     reset_vector=bytes([0xE8, 0xB1]),
 )
 
@@ -518,6 +522,7 @@ ROM_266B = ROMVariant(
                       # (0x1100-0x1FFF erased/0xFF — checksum region unprogrammed)
                       # Fuel/timing maps identical to 0x7739bde5 except
                       # 5 bytes @ 0x0E3A-0x0E3F (Decel Cutoff, ±1 count revision)
+        0xa0abd0be,   # 034_-_893906266B_Stock.034 unscrambled to flat 32KB bin
     ],
     reset_vector=bytes([0xD7, 0xBC]),
 )
