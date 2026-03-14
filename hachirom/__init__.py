@@ -50,7 +50,7 @@ from .roms   import (ROMVariant, MapDef, ALL_VARIANTS,
                      MAF_AXIS_1_8T_60, MAF_AXIS_1_8T_VR6,
                      MAF_AXIS_ADDR_FUEL, MAF_AXIS_ADDR_TIMING)
 
-__version__ = "0.9.0"
+__version__ = "0.9.1"
 
 from .kwp import KWPMonitor, LiveValues, kwpbridge_available, kwpbridge_running
 

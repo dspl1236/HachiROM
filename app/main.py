@@ -2925,9 +2925,93 @@ class MainWindow(QMainWindow):
         self._kwp_monitor.live_data.connect(self._on_kwp_live_data)
         self._kwp_monitor.mismatch.connect(self._on_kwp_mismatch)
 
+        # ── Mock ECU server (Debug menu) ──────────────────────────────────────
+        self._mock_server       = None
+        self._mock_warmup_start = None
+        self._mock_timer        = None
+
         self._build_menu()
         self._build_ui()
         self._apply_dark_theme()
+
+    # ── Debug — Mock ECU ──────────────────────────────────────────────────────
+
+    def _debug_start_mock(self):
+        """Start KWPBridge mock server and connect the KWP monitor."""
+        try:
+            import sys, time
+            from pathlib import Path
+            # KWPBridge may be adjacent to HachiROM or installed
+            kwp_path = Path(__file__).parent.parent.parent / "KWPBridge"
+            if kwp_path.exists() and str(kwp_path) not in sys.path:
+                sys.path.insert(0, str(kwp_path))
+
+            from kwpbridge.mock.server import MockServer
+            from kwpbridge.constants import DEFAULT_PORT
+
+            if self._mock_server and self._mock_server.is_running():
+                return
+
+            self._mock_server = MockServer(ecu="7a", port=DEFAULT_PORT, poll_hz=3.0)
+            self._mock_server.start()
+            self._mock_warmup_start = time.time()
+
+            self._act_mock_start.setEnabled(False)
+            self._act_mock_stop.setEnabled(True)
+            self._act_mock_status.setText("⚙ Mock 7A running — Cold Start → Idle → Cruise → WOT → Decel")
+
+            # Start scenario status timer
+            self._mock_timer = QTimer(self)
+            self._mock_timer.timeout.connect(self._debug_update_mock_status)
+            self._mock_timer.start(500)
+
+            self.statusBar().showMessage(
+                "Mock ECU started — 7A 893906266D  ·  KWP monitor will auto-connect")
+
+        except ImportError:
+            QMessageBox.warning(
+                self, "KWPBridge not found",
+                "KWPBridge package not found.\n\n"
+                "Clone KWPBridge alongside HachiROM:\n"
+                "  git clone https://github.com/dspl1236/KWPBridge\n\n"
+                "Then restart HachiROM.")
+        except Exception as e:
+            QMessageBox.critical(self, "Mock start error", str(e))
+
+    def _debug_stop_mock(self):
+        """Stop the mock server."""
+        if self._mock_timer:
+            self._mock_timer.stop()
+            self._mock_timer = None
+        if self._mock_server:
+            self._mock_server.stop()
+            self._mock_server = None
+        self._mock_warmup_start = None
+        self._act_mock_start.setEnabled(True)
+        self._act_mock_stop.setEnabled(False)
+        self._act_mock_status.setText("No mock running")
+        self.statusBar().showMessage("Mock ECU stopped")
+
+    def _debug_update_mock_status(self):
+        """Update Debug menu status item with current scenario."""
+        if not self._mock_server or not self._mock_server.is_running():
+            self._debug_stop_mock()
+            return
+        try:
+            import time
+            from kwpbridge.mock.ecu_7a import get_scenario_info
+            info = get_scenario_info(time.time(), self._mock_warmup_start)
+            pct  = int(info["progress"] * 100)
+            bar_w = 16
+            bar  = "█" * int(bar_w * info["progress"]) + "░" * (bar_w - int(bar_w * info["progress"]))
+            self._act_mock_status.setText(
+                f"⚙  [{bar}]  {info['scenario']}  {pct}%")
+        except Exception:
+            pass
+
+    def closeEvent(self, event):
+        self._debug_stop_mock()
+        event.accept()
 
     # ── Menu ─────────────────────────────────────────────────────────────────
 
@@ -2947,6 +3031,25 @@ class MainWindow(QMainWindow):
         fm.addAction("Quit", self.close)
         hm = mb.addMenu("Help")
         hm.addAction("About HachiROM", self._about)
+
+        # ── Debug menu ────────────────────────────────────────────────────────
+        dm = mb.addMenu("Debug")
+        self._act_mock_start = QAction("▶  Start Mock ECU (7A)", self)
+        self._act_mock_start.setToolTip(
+            "Start KWPBridge mock server and auto-connect.\n"
+            "Simulates 266D: Cold Start → Idle → Cruise → WOT → Decel loop.")
+        self._act_mock_start.triggered.connect(self._debug_start_mock)
+        dm.addAction(self._act_mock_start)
+
+        self._act_mock_stop = QAction("■  Stop Mock ECU", self)
+        self._act_mock_stop.setEnabled(False)
+        self._act_mock_stop.triggered.connect(self._debug_stop_mock)
+        dm.addAction(self._act_mock_stop)
+
+        dm.addSeparator()
+        self._act_mock_status = QAction("No mock running", self)
+        self._act_mock_status.setEnabled(False)
+        dm.addAction(self._act_mock_status)
 
     # ── UI ───────────────────────────────────────────────────────────────────
 
