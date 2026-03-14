@@ -1540,7 +1540,7 @@ _MAP_TIPS: dict[str, dict] = {
     "Primary Fueling": {
         "what":  "The main fuel delivery table. Each cell sets the injector "
                  "pulse width (or lambda target on B/AAH) at a given RPM and "
-                 "engine load (MAP sensor pressure).",
+                 "engine load (calculated from MAF airflow — not a direct MAP sensor reading).",
         "tips": [
             "Richer (higher value) = more fuel. Lean (lower) = less fuel.",
             "Work across the load axis first — wide-open throttle is the "
@@ -1668,8 +1668,8 @@ _MAP_TIPS: dict[str, dict] = {
                    "once the fuel map is properly tuned.",
     },
     "CL Load Threshold": {
-        "what":  "7A ECUs (266B/D) only. A 16-column table giving the MAP sensor "
-                 "load level per RPM column below which closed-loop O2 correction "
+        "what":  "7A ECUs (266B/D) only. A 16-column table giving the calculated "
+                 "engine load level per RPM column below which closed-loop O2 correction "
                  "is active. Above this load the ECU follows the fuel map exactly. "
                  "Works together with CL RPM Limit — the ECU goes open-loop when "
                  "EITHER condition is met.",
@@ -2409,8 +2409,8 @@ class MainWindow(QMainWindow):
             "Open a .bin or .034 ROM file to begin.\n\n"
             "Supported ECUs — Hitachi MMS family\n"
             "  MMS05C  893906266D — 7A Late  (Audi 80/90/Coupe Quattro 2.3 20v, 1991–1995, 4-pin MAF)\n"
-            "  MMS05C  893906266B — 7A Early (Audi 80/90/Coupe Quattro 2.3 20v, pre-1991, 2-pin MAF)\n"
-            "  MMS100  4A0906266  — AAH 12v  (Audi 100 C4 / S4 C4 2.8 V6 12v, MAP-sensor ECU)\n"
+            "  MMS05C  893906266B — 7A Early (Audi 80/90/Coupe Quattro 2.3 20v, pre-1991, 4-pin MAF)\n"
+            "  MMS100  4A0906266  — AAH 12v  (Audi 100 C4 / S4 C4 2.8 V6 12v, 3-pin MAF, calc load)\n"
             "  MMS-200 8A0906266A — AAH/ACK  (Audi 90/A6/100 C4 2.8 V6 12v, 1992–1995)\n"
             "  MMS-300 8A0906266B — AAH/ACK  (Audi 2.8 V6 later revision)  [stub — ROM wanted]\n\n"
             "266D / 266B extras:  MAF axis patch  ·  CO pot disable patch\n\n"

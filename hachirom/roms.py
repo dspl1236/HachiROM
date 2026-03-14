@@ -54,7 +54,8 @@ LOAD_AXIS_AAH   = [12.6,18.8,23.5,28.2,32.9,38.4,43.9,50.2,56.5,62.8,69.0,75.3,8
 
 # ---------------------------------------------------------------------------
 # MAF hardware patch tables — 266D and 266B only
-# (AAH uses a MAP-sensor-derived load axis, not a MAF ADC axis)
+# (AAH/MMS200 load axis is calculated engine load % derived from MAF signal,
+#  not a direct MAP sensor reading. The ECU computes load from MAF airflow.)
 #
 # ⚠ EXPERIMENTAL: All MAF axis patches (including stock_7a restore) involve
 # modifying fuel and timing map interpolation axes.  The 7A Hitachi profiles
@@ -476,10 +477,12 @@ _MAPS_266B = [
     MapDef("Idle Ignition Trim",    0x02A0,  1, 16,
            "Idle timing correction vs coolant temp. Signed byte (deg).", "deg"),
 
-    # ── MAF (266B only — 266D uses MAP sensor only) ──────────────────────────
+    # ── MAF linearisation (266B only) ───────────────────────────────────────
+    # 266D uses MAF ADC counts directly against the axis table (no linearisation
+    # lookup needed — the axis bytes ARE the voltage-to-load mapping).
     MapDef("MAF Linearization",     0x02D0,  1, 64,
            "MAF sensor linearisation table. 64×16-bit big-endian values. "
-           "266B only — not present on 266D (MAP-only).", "raw"),
+           "266B only — 266D uses MAF axis bytes directly without a linearisation table.", "raw"),
 
     # ── Accel enrichment ─────────────────────────────────────────────────────
     MapDef("Accel Enrichment",      0x0400,  1, 16,
