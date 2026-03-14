@@ -13,11 +13,16 @@ from PyQt5.QtWidgets import (
     QTextEdit, QSplitter, QAction, QHeaderView, QDialog,
     QDialogButtonBox, QFrame, QLineEdit, QScrollArea, QComboBox
 )
-from PyQt5.QtCore import Qt, pyqtSignal
+from PyQt5.QtCore import Qt, pyqtSignal, QTimer
 from PyQt5.QtGui import QColor, QFont, QBrush
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 import hachirom as hr
+from hachirom.kwp import (
+    KWPMonitor, LiveValues,
+    kwpbridge_available, kwpbridge_running,
+    status_label, live_summary,
+)
 
 APP_VERSION = hr.__version__
 
@@ -813,10 +818,132 @@ class MapTab(QWidget):
             if self._local[r][c] != self._baseline[r][c]
         )
 
+    # ── KWPBridge live overlay ────────────────────────────────────────────────
 
-# ---------------------------------------------------------------------------
-# Overview tab  — single-value edits surfaced as labelled input fields
-# ---------------------------------------------------------------------------
+    def attach_kwp(self):
+        """Enable the live overlay. Called by MainWindow when ECU matches ROM."""
+        self._kwp_active = True
+
+    def detach_kwp(self):
+        """Disable the live overlay and clear all cursor highlights."""
+        self._kwp_active = False
+        self._kwp_rpm_col  = None
+        self._kwp_load_row = None
+        self._kwp_lambda   = None
+        self._refresh_overlay()
+
+    def update_overlay(self, lv):
+        """
+        Update live cursor position and lambda tint from a LiveValues object.
+        Called by MainWindow on every KWPBridge state update.
+        """
+        if not getattr(self, '_kwp_active', False):
+            return
+        if lv is None or not lv.valid:
+            return
+
+        rpm_axis  = self.map_def.rpm_axis
+        load_axis = self.map_def.load_axis
+
+        # Find nearest column (RPM) and row (load)
+        new_col = None
+        if rpm_axis and lv.rpm is not None:
+            new_col = min(range(len(rpm_axis)),
+                         key=lambda i: abs(rpm_axis[i] - lv.rpm))
+            new_col = min(new_col, self.map_def.cols - 1)
+
+        new_row = None
+        if load_axis and lv.load is not None:
+            new_row = min(range(len(load_axis)),
+                         key=lambda i: abs(load_axis[i] - lv.load))
+            new_row = min(new_row, self.map_def.rows - 1)
+
+        changed = (new_col != getattr(self, '_kwp_rpm_col', None) or
+                   new_row != getattr(self, '_kwp_load_row', None) or
+                   lv.lambda_ != getattr(self, '_kwp_lambda', None))
+
+        self._kwp_rpm_col  = new_col
+        self._kwp_load_row = new_row
+        self._kwp_lambda   = lv.lambda_
+
+        if changed:
+            self._refresh_overlay()
+
+    def _refresh_overlay(self):
+        """Repaint all cells to show cursor lines and lambda tint."""
+        rows, cols = self.map_def.rows, self.map_def.cols
+        active     = getattr(self, '_kwp_active', False)
+        rpm_col    = getattr(self, '_kwp_rpm_col', None)
+        load_row   = getattr(self, '_kwp_load_row', None)
+        lambda_    = getattr(self, '_kwp_lambda', None)
+
+        # Lambda tint colour
+        if lambda_ is not None and active:
+            if 0.95 <= lambda_ <= 1.05:
+                tint = QColor(45, 255, 110, 40)    # green, low alpha
+            elif 0.85 <= lambda_ < 0.95 or 1.05 < lambda_ <= 1.15:
+                tint = QColor(255, 170, 0,  50)    # amber
+            else:
+                tint = QColor(255, 68,  68, 60)    # red
+        else:
+            tint = None
+
+        all_raw = [self._local[r][c] for r in range(rows) for c in range(cols)]
+        vmin, vmax = min(all_raw), max(all_raw)
+
+        for r in range(rows):
+            for c in range(cols):
+                item = self.table.item(r, c)
+                if item is None:
+                    continue
+                v       = self._local[r][c]
+                ch      = v != self._baseline[r][c]
+                is_active_cell = (active and
+                                  r == load_row and c == rpm_col)
+                is_rpm_line    = (active and
+                                  c == rpm_col and load_row is not None)
+                is_load_line   = (active and
+                                  r == load_row and rpm_col is not None)
+
+                # Base colour from map type
+                base_col = (timing_colour(v) if self._is_timing
+                            else heat_colour(v, vmin, vmax))
+
+                if is_active_cell:
+                    # Bright white border, lambda tint on background
+                    item.setBackground(tint or QColor(255, 255, 255, 30))
+                    item.setForeground(QColor("#ffffff"))
+                    _colour_item(item, base_col, ch)
+                    # Override background after _colour_item sets it
+                    bg = QColor(base_col)
+                    if tint:
+                        bg = QColor(
+                            min(255, bg.red()   + tint.red()   * tint.alpha() // 255),
+                            min(255, bg.green() + tint.green() * tint.alpha() // 255),
+                            min(255, bg.blue()  + tint.blue()  * tint.alpha() // 255),
+                        )
+                    item.setBackground(bg)
+                    # White border on active cell via tooltip hack
+                    item.setToolTip(
+                        f"▶ ACTIVE  raw={v}  "
+                        f"{'→ ' + self._decode(v) if self.map_def.decode else ''}\n"
+                        f"RPM≈{self.map_def.rpm_axis[c] if self.map_def.rpm_axis else '?'}  "
+                        f"Load≈{self.map_def.load_axis[r] if self.map_def.load_axis else '?'}  "
+                        f"λ={lambda_:.3f}" if lambda_ else ""
+                    )
+                elif is_rpm_line or is_load_line:
+                    # Dim cursor line highlight
+                    _colour_item(item, base_col, ch)
+                    bg = QColor(base_col)
+                    bg = bg.lighter(130)
+                    item.setBackground(bg)
+                else:
+                    _colour_item(item, base_col, ch)
+                    if self._is_timing:
+                        s = v if v < 128 else v - 256
+                        item.setToolTip(f"raw={v}  \u2192  {s:+d}\u00b0 BTDC")
+
+
 
 class OverviewField(QWidget):
     """One labelled row: name | current value | RPM input | Apply button | status."""
@@ -1074,7 +1201,17 @@ class OverviewTab(QWidget):
         self._variant      = variant
         self._rom_snapshot = rom_snapshot
         self._scalar_rows: list[tuple] = []  # (addr_lbl, raw_lbl, dec_lbl)
+        self._kwp_banner:  QLabel | None = None
         self._build_ui(variant, rom_snapshot)
+
+    def update_kwp_status(self, text: str, colour: str):
+        """Update the KWPBridge status banner. Called by MainWindow."""
+        if self._kwp_banner:
+            self._kwp_banner.setText(text)
+            self._kwp_banner.setStyleSheet(
+                f"background:#111; color:{colour}; font-size:11px; "
+                f"font-family:Consolas; padding:6px 12px; "
+                f"border-left:3px solid {colour}; margin-bottom:4px;")
 
     def _build_ui(self, variant, rom_snapshot: bytes):
         root = QVBoxLayout(self)
@@ -1090,6 +1227,14 @@ class OverviewTab(QWidget):
         layout.setSpacing(16)
         scroll.setWidget(inner)
         root.addWidget(scroll)
+
+        # ── KWPBridge status banner ───────────────────────────────────────────
+        self._kwp_banner = QLabel("● KWPBridge not running  —  live overlay unavailable")
+        self._kwp_banner.setStyleSheet(
+            "background:#111; color:#444; font-size:11px; "
+            "font-family:Consolas; padding:6px 12px; "
+            "border-left:3px solid #333; margin-bottom:4px;")
+        layout.addWidget(self._kwp_banner)
 
         # ── ROM IDENTITY ──────────────────────────────────────────────────────
         hdr = QLabel("ROM IDENTITY")
@@ -2771,6 +2916,15 @@ class MainWindow(QMainWindow):
         self._hex_tab:        HexViewTab | None = None
         self._scalars_tab:    ScalarsTab | None = None
         self._compare_tab_idx: int = -1
+
+        # ── KWPBridge live overlay ────────────────────────────────────────────
+        self._kwp_monitor   = KWPMonitor(self)
+        self._kwp_matched   = False
+        self._kwp_monitor.connected.connect(self._on_kwp_connected)
+        self._kwp_monitor.disconnected.connect(self._on_kwp_disconnected)
+        self._kwp_monitor.live_data.connect(self._on_kwp_live_data)
+        self._kwp_monitor.mismatch.connect(self._on_kwp_mismatch)
+
         self._build_menu()
         self._build_ui()
         self._apply_dark_theme()
@@ -2909,6 +3063,68 @@ class MainWindow(QMainWindow):
             self._scalars_tab.update_rom(bytes(built))
         if self._hardware_tab:
             self._hardware_tab.update_rom(bytes(built))
+
+    # ── KWPBridge live overlay handlers ──────────────────────────────────────
+
+    def _on_kwp_connected(self, ecu_pn: str):
+        """KWPBridge connected — check part number and enable overlay if matched."""
+        self._kwp_matched = self._kwp_monitor.is_matched()
+        self._update_kwp_ui()
+        if self._kwp_matched:
+            for tab in self._map_tabs:
+                tab.attach_kwp()
+            self.statusBar().showMessage(
+                f"KWPBridge connected  ·  {ecu_pn}  ·  ECU matches ROM  ·  live overlay active")
+        else:
+            rom_pn = getattr(self.current_variant, 'part_number', '') if self.current_variant else ''
+            self.statusBar().showMessage(
+                f"KWPBridge connected  ·  ECU {ecu_pn}  ≠  ROM {rom_pn}  ·  overlay locked")
+
+    def _on_kwp_disconnected(self):
+        """KWPBridge disconnected — clear all overlays."""
+        self._kwp_matched = False
+        for tab in self._map_tabs:
+            tab.detach_kwp()
+        self._update_kwp_ui()
+        self.statusBar().showMessage("KWPBridge disconnected")
+
+    def _on_kwp_mismatch(self, ecu_pn: str, rom_pn: str):
+        """ECU part number doesn't match loaded ROM."""
+        self._kwp_matched = False
+        for tab in self._map_tabs:
+            tab.detach_kwp()
+        self._update_kwp_ui()
+
+    def _on_kwp_live_data(self, lv: LiveValues):
+        """Live data received — update overlays and status strip."""
+        if not self._kwp_matched:
+            return
+        # Update all map tab overlays
+        for tab in self._map_tabs:
+            tab.update_overlay(lv)
+        # Update tip strip with live summary
+        summary = live_summary(lv)
+        if summary:
+            current_tip = self._tip_strip.text()
+            # Only replace if not currently showing map tip
+            if "KWP" in current_tip or "live" in current_tip.lower() or not current_tip:
+                self._update_tip_strip(f"🟢  {summary}")
+        # Update overview banner
+        self._update_kwp_ui(lv)
+
+    def _update_kwp_ui(self, lv: LiveValues = None):
+        """Refresh KWP status across all relevant tabs."""
+        if not self._overview_tab:
+            return
+        rom_pn = getattr(self.current_variant, 'part_number', '') if self.current_variant else ''
+        text, colour = status_label(self._kwp_monitor, rom_pn)
+        if lv and self._kwp_matched:
+            summary = live_summary(lv)
+            if summary:
+                text = f"🟢  {self._kwp_monitor.current_pn()}  ·  {summary}"
+        self._overview_tab.update_kwp_status(text, colour)
+
+
 
     def _on_hardware_patch(self, patch_type: str, dlg):
         """Route patch dialogs from HardwareTab back through existing handlers."""
@@ -3075,6 +3291,13 @@ class MainWindow(QMainWindow):
         self.statusBar().showMessage(
             f"Loaded {Path(path).name}  ·  {variant_name}  ·  "
             f"confidence: {result.confidence}")
+
+        # Tell KWP monitor what ROM is loaded — enables safety gate
+        if result.variant:
+            pn = getattr(result.variant, 'part_number', '')
+            if pn:
+                self._kwp_monitor.set_rom_part_number(pn)
+                self._update_kwp_ui()
 
     # ── Save helpers ──────────────────────────────────────────────────────────
 
