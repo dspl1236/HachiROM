@@ -53,6 +53,20 @@ Hitachi MMS-family ECUs (MMS05C, MMS100, MMS-200, MMS-300).
 
 ---
 
+## Development
+
+HachiROM was developed by **dspl1236** in collaboration with
+**Claude** (Anthropic) — the library architecture, ROM analysis, map address
+verification, patch implementations, and GUI were built across a series of
+sessions using Claude as a development partner.
+
+The ROM reverse engineering work (map addresses, CO pot scalar block,
+checksum regions, MAF axis encoding, MMS platform differences) was done
+by diffing physical EPROM reads and known-good stock files, with Claude
+handling the analysis and implementation.
+
+---
+
 ## Project
 
 HachiROM is developed by **dspl1236** as a companion to the
