@@ -38,7 +38,7 @@ Hitachi MMS-family ECUs (MMS05C, MMS100, MMS-200, MMS-300).
 | Audi_90_20V_893906266B.bin | 266B (MMS-04B) | Community contribution | Physical EPROM read. Fuel/timing maps match 034 stock. 0x1100–0x1FFF erased. |
 | Audi_100_2_8_-_8A0906266b_MMS-300.bin | 8A0906266B (MMS-300) | Community contribution | 32KB slice, maps verified |
 | V6AAHCoupeMMS200.bin | 8A0906266A | NefMoto forums (LHN) | MMS-200 map verification |
-| Audi_100_2_8_-_8A0906266b_MMS-300.bin | 8A0906266B (MMS-300) | Community contribution | Truncated dump (61056 bytes). Maps intact, padded to 32KB. |
+| Audi_100_2_8_-_8A0906266b_MMS-300.bin | 8A0906266B (MMS-300) | Community contribution | Truncated dump (61056 bytes). First 32KB extracted — maps intact, no padding. |
 
 ---
 
