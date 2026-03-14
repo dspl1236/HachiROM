@@ -57,10 +57,9 @@ def _normalise(data: bytes, notes: list[str]) -> bytes:
     original_size = len(data)
 
     # --- Step 1: Collapse >32KB to candidate 32KB halves -----------------
-    if original_size == 65536 or original_size > 32768:
+    if original_size == 65536:
         lo = data[:32768]
         hi = data[32768:65536]
-
         lo_ff = sum(1 for b in lo if b == 0xFF) / 32768
         hi_ff = sum(1 for b in hi if b == 0xFF) / 32768
 

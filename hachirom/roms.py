@@ -700,33 +700,66 @@ ROM_MMS200 = ROMVariant(
 )
 
 # ---------------------------------------------------------------------------
-# MMS-300 — 8A0906266B  (stub)
+# MMS-300 — 8A0906266B
 # ---------------------------------------------------------------------------
 #
 # Hardware:
 #   ECU hardware:  Hitachi MMS-300
 #   Part number:   8A0 906 266 B
-#   Engine:        AAH/ACK 2.8L V6 12v (later revision)
+#   Engine:        AAH/ACK 2.8L V6 12v (later revision than MMS-200)
+#   Vehicles:      Audi 100 C4 2.8, Audi A6 C4 2.8 (later build dates)
 #
-# ROM layout (from 8A0906266B-MMS300.xdf — DIFFERENT from MMS200):
-#   KFKES  0x0700  16×16  Fuel map
-#   KFZW   0x1100  16×16  Timing map 1
-#   KFZW2  0x1200  16×16  Timing map 2
-#   NMAX   0x0524  16-bit  Rev limiter (formula TBD)
+# ROM layout (verified from Audi_100_2_8_-_8A0906266b_MMS-300.bin +
+#             8A0906266B-MMS300.xdf):
+#   DIFFERENT from MMS-200 — all map addresses shifted.
 #
-# No ROM dump available yet — stub only.
+#   KFKES  0x0700  16x16  Fuel/lambda map (signed bytes, same encoding as MMS-200)
+#   KFZW   0x1100  16x16  Primary timing (deg BTDC) — nearly identical to MMS-200
+#   KFZW2  0x1200  16x16  Knock/safety timing map
+#   NMAX   0x0524  16-bit LE  Rev limiter — RPM = raw/4, stock 25600 = 6400 RPM
+#   Load axis 0x0800  1x16  [10,20,30,...,160] — percent load in 10% steps
+#
+# Calibration vs MMS-200:
+#   Timing: 17 and 12 byte diffs — slightly more advance at high RPM (rows 14-15)
+#   Fuel:   246 diffs — different calibration, slightly leaner overall
+#   NMAX:   identical (6400 RPM)
+#
+# Dump notes:
+#   File 61056 bytes (0xEE80) — non-standard, dump artefact
+#   First 32768 bytes are actual ROM. 32KB CRC32: 0x84dde88e
 # ---------------------------------------------------------------------------
 
-_MAPS_MMS300: list = []   # unknown until dump obtained
+LOAD_AXIS_MMS300 = [10,20,30,40,50,60,70,80,90,100,110,120,130,140,150,160]
+
+_MAPS_MMS300 = [
+    MapDef("Primary Fueling",    0x0700, 16, 16,
+           "Fuel/lambda correction map (KFKES). Signed byte encoding, "
+           "same formula as MMS-200/AAH. Calibration differs.", "lambda",
+           rpm_axis=RPM_AXIS_AAH, load_axis=LOAD_AXIS_MMS300,
+           decode=fuel_lambda_decode, encode=fuel_lambda_encode),
+    MapDef("Primary Timing",     0x1100, 16, 16,
+           "Primary ignition advance map (KFZW). Deg BTDC. "
+           "Nearly identical to MMS-200, slightly more advance at high RPM.", "deg BTDC",
+           rpm_axis=RPM_AXIS_AAH, load_axis=LOAD_AXIS_MMS300,
+           decode=timing_decode, encode=timing_encode),
+    MapDef("Timing Knock Safety", 0x1200, 16, 16,
+           "Knock fallback timing map (KFZW2). Deg BTDC.", "deg BTDC",
+           rpm_axis=RPM_AXIS_AAH, load_axis=LOAD_AXIS_MMS300,
+           decode=timing_decode, encode=timing_encode),
+    MapDef("RPM Limit",          0x0524,  1,  1,
+           "Rev limiter (NMAX). 16-bit LE at 0x0524. RPM = raw_uint16 / 4. "
+           "Stock: 25600 = 6400 RPM.", "raw"),
+]
 
 ROM_MMS300 = ROMVariant(
     name="MMS-300 2.8 V6", version_key="MMS300", part_number="8A0906266B",
     chip="27C512", size=32768,
-    description="Audi 2.8 V6 (AAH/ACK) — Hitachi MMS-300 platform. "
-                "STUB: no ROM dump available. Map addresses from XDF only.",
+    description="Audi 100/A6 C4 2.8 V6 12v (AAH/ACK) — Hitachi MMS-300. "
+                "Later revision than MMS-200. Fuel@0x0700, timing@0x1100, "
+                "knock@0x1200, NMAX 16-bit LE@0x0524.",
     maps=_MAPS_MMS300,
     checksum={},
-    known_crc32s=[],
+    known_crc32s=[0x84dde88e],   # 32KB slice of Audi_100_2_8_-_8A0906266b_MMS-300.bin
     reset_vector=None,
 )
 
@@ -735,9 +768,8 @@ ROM_MMS300 = ROMVariant(
 # Registry
 # ---------------------------------------------------------------------------
 
-ALL_VARIANTS: list[ROMVariant] = [ROM_266D, ROM_266B, ROM_AAH, ROM_MMS200]
-# ROM_MMS300 excluded until ROM dump obtained
-# ALL_VARIANTS.append(ROM_MMS300)
+ALL_VARIANTS: list[ROMVariant] = [ROM_266D, ROM_266B, ROM_AAH, ROM_MMS200, ROM_MMS300]
+
 
 _CRC32_MAP: dict[int, ROMVariant] = {}
 for _v in ALL_VARIANTS:

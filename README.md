@@ -24,7 +24,7 @@ Windows `.exe`, macOS, and Linux binaries — no install required.
 | 893906266B  | MMS-04B  | 7A 20v — 2.3L (pre-1991)  | 4-pin MAF | Earlier platform than 266D (MMS05C). MAF linearisation table present. |
 | 4A0906266   | MMS100   | AAH 12v — 2.8L V6         | 3-pin MAF  | Separate ECU generation — maps editable, no MAF/CO pot patches |
 | 8A0906266A  | MMS-200  | AAH/ACK 2.8L V6 (1992–95) | 3-pin MAF  | Same ROM layout as MMS100. NMAX 16-bit LE at 0x077D. Verified. |
-| 8A0906266B  | MMS-300  | AAH/ACK 2.8L V6 (later)   | 3-pin MAF  | Different map layout. **Stub only — ROM dump wanted.** |
+| 8A0906266B  | MMS-300  | AAH/ACK 2.8L V6 (later)   | 3-pin MAF  | Fuel@0x0700, timing@0x1100/0x1200, NMAX@0x0524. Timing near-identical to MMS-200. |
 
 The 266D uses the MMS05C hardware platform. The 266B uses the earlier MMS-04B platform. The AAH MMS100 is a later
 generation with a different load sensing architecture (MAP-based, not MAF-based).
