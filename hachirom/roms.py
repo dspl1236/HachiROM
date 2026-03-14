@@ -739,3 +739,57 @@ _RESET_VEC_MAP: dict[tuple, ROMVariant] = {
     (0xEF, 0x18): ROM_AAH,
 }
 
+
+
+# ---------------------------------------------------------------------------
+# MMS-04B vs MMS05C map differences — confirmed from ROM diff analysis
+# ---------------------------------------------------------------------------
+#
+# The 266B (MMS-04B) and 266D (MMS05C) share the same primary fuel and
+# timing map addresses (0x0000, 0x0100, 0x1000) and the same map size
+# (16×16). The fuel and timing map values are IDENTICAL between the two
+# stock ROMs, confirming the same base calibration.
+#
+# Structural differences:
+#
+# 1. MAF LINEARISATION (MMS-04B only)
+#    0x02D0: 64×16-bit big-endian MAF linearisation table (128 bytes)
+#    Values 1–7968 — smooth monotonic curve, sensor transfer function lookup
+#    0x0200: Second copy of the same table (or continuation — entries 0-32)
+#    MMS05C (266D) uses MAF axis bytes directly — no linearisation lookup.
+#
+# 2. AFTER-START ENRICHMENT REGION (0x0220)
+#    266D: 16 single bytes, lambda-decoded
+#    266B: region contains 16-bit MAF table data — different layout entirely
+#    The MMS-04B likely stores after-start enrichment elsewhere (unconfirmed)
+#
+# 3. CL RPM LIMIT (0x07E1)
+#    266D: raw=204 → 5100 RPM (closed loop disabled above 5100 RPM)
+#    266B: raw=244 → 6100 RPM (closed loop active almost to redline)
+#
+# 4. ACCEL DECAY BLOCK (0x0430-0x046F, 64 bytes = 4×16)
+#    266D rows 1 & 3: signed negative values (245–229 = -11 to -27)
+#    266B rows 1 & 3: small positive values (13–37)
+#    Likely two separate 16-entry tables per bank/condition — the alternating
+#    row structure suggests ISV duty cycle or idle control data is interleaved
+#    with accel decay in the MMS05C. Needs further investigation.
+#
+# 5. ISV CONTROL REGION (0x0530-0x054F)
+#    Both ECUs have calibration data here but with consistent ~5 unit offset
+#    266D values are uniformly higher (25-33) vs 266B (20-28)
+#    Consistent with the different ISV hardware requiring different duty cycles
+#
+# 6. DECEL CUTOFF (0x0E30)
+#    266D: active from column 3 onward (values 16-48 in mid columns)
+#    266B: zero through column 9, then values from column 10 onward
+#    266B keeps fuel cut off at lower loads — earlier/more aggressive cutoff
+#    at low RPM, but activates later relative to load. ISV behaviour difference.
+#
+# 7. LARGE UNIDENTIFIED BLOCKS
+#    0x0380-0x03FF: Both ECUs have substantial data here, all different
+#    0x0600-0x07FF: Heavy scatter of diffs — likely ISV duty cycle maps,
+#                   idle correction tables, and lambda control parameters
+#    0x0800-0x0BFF: Major structural differences — ISV and idle management
+#    0x0CA8-0x0CD7: 48 bytes, different — possibly lambda/O2 control
+#    These regions are unidentified and differ significantly between ECUs,
+#    consistent with the ISV hardware change requiring different control logic.
