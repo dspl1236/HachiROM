@@ -1061,13 +1061,12 @@ class InjectorCalcWidget(QWidget):
 
 class OverviewTab(QWidget):
     """
-    First tab — ROM identity card + scalar editors.
-    Top: full-width ROM info (variant, patches, checksums).
-    Bottom: scalar editors (RPM limit, CL limit, injection scaler).
-    Right sidebar: tuning tips panel.
+    First tab — ROM identity card only.
+    Shows variant, patches, checksum, detected states.
+    Scalar editors (RPM limit, injection scaler, CL) have moved to Hardware tab.
     """
 
-    FIELD_NAMES = ["RPM Limit", "Injection Scaler", "CL Disable RPM", "CL RPM Limit"]
+    FIELD_NAMES: list = []   # no editable fields on Overview any more
 
     def __init__(self, variant, rom_snapshot: bytes, parent=None):
         super().__init__(parent)
@@ -1075,76 +1074,32 @@ class OverviewTab(QWidget):
         self._build_ui(variant, rom_snapshot)
 
     def _build_ui(self, variant, rom_snapshot: bytes):
-        root = QHBoxLayout(self)
-        root.setContentsMargins(0, 0, 0, 0)
-        root.setSpacing(0)
+        root = QVBoxLayout(self)
+        root.setContentsMargins(20, 20, 20, 20)
+        root.setSpacing(12)
 
-        # ── Left column ───────────────────────────────────────────────────────
-        left_widget = QWidget()
-        outer = QVBoxLayout(left_widget)
-        outer.setContentsMargins(20, 20, 12, 20)
-        outer.setSpacing(0)
+        # ROM identity card — full width
+        hdr = QLabel("ROM IDENTITY")
+        hdr.setStyleSheet(
+            "color:#2dff6e; font-size:10px; font-weight:bold; letter-spacing:2px;")
+        root.addWidget(hdr)
 
-        # ── ROM INFO CARD ─────────────────────────────────────────────────────
-        outer.addWidget(self._section_header("ROM IDENTITY", ""))
+        sep = QFrame()
+        sep.setFrameShape(QFrame.HLine)
+        sep.setStyleSheet("color:#2a2a2a;")
+        root.addWidget(sep)
+
         self._rom_card = self._build_rom_card(variant, rom_snapshot)
-        outer.addWidget(self._rom_card)
-        outer.addSpacing(20)
+        root.addWidget(self._rom_card)
 
-        # ── REV LIMIT section ─────────────────────────────────────────────────
-        rpm_maps = [m for m in variant.maps if m.name == "RPM Limit"]
-        if rpm_maps:
-            outer.addWidget(self._section_header(
-                "REV LIMIT",
-                "The classic first EPROM edit. Change the value, "
-                "click Apply, then Save 27C512 and burn the chip."))
-            field = OverviewField(rpm_maps[0], rom_snapshot)
-            field.selected.connect(self._on_field_selected)
-            self._fields.append(field)
-            outer.addWidget(field)
-            outer.addSpacing(8)
-
-        # ── ECU PARAMETERS section ────────────────────────────────────────────
-        param_names = ["Injection Scaler", "CL Disable RPM", "CL RPM Limit"]
-        param_maps  = [m for m in variant.maps if m.name in param_names]
-        param_maps.sort(key=lambda m: param_names.index(m.name)
-                        if m.name in param_names else 99)
-        has_scaler = any(m.name == "Injection Scaler" for m in variant.maps)
-
-        subtitle = (
-            "Injection Scaler not present — injector pulse fixed in firmware. "
-            "Tune via fuel map." if not has_scaler
-            else "Single-byte scalars that affect the whole fuel system.")
-
-        if param_maps or not has_scaler:
-            outer.addSpacing(8)
-            outer.addWidget(self._section_header("ECU PARAMETERS", subtitle))
-            for m in param_maps:
-                field = OverviewField(m, rom_snapshot)
-                field.selected.connect(self._on_field_selected)
-                self._fields.append(field)
-                outer.addWidget(field)
-                outer.addSpacing(4)
-
-        outer.addStretch()
-
-        # ── Workflow hint ─────────────────────────────────────────────────────
         hint = QLabel(
-            "Workflow:  Open ROM  →  edit values above  →  "
-            "Save 27C512 .bin  →  burn with TL866 / T48  →  install  →  test\n"
-            "Hardware patches (MAF axis, CO pot):  see the Hardware tab →")
+            "Edit scalars (RPM limit, injection scaler, CL) and hardware "
+            "patches (MAF axis, CO pot) on the ⚙ Hardware tab →")
         hint.setWordWrap(True)
-        hint.setStyleSheet("color:#555; font-size:11px; padding:12px 0 0 0;")
-        outer.addWidget(hint)
+        hint.setStyleSheet("color:#444; font-size:11px; padding:8px 0 0 0;")
+        root.addWidget(hint)
 
-        # ── Right column: tips panel ──────────────────────────────────────────
-        self._tips_panel = MapInfoPanel()
-        self._tips_panel.setFixedWidth(310)
-        self._tips_panel.setStyleSheet(
-            "background:#131313; border-left:1px solid #222;")
-
-        root.addWidget(left_widget, stretch=1)
-        root.addWidget(self._tips_panel)
+        root.addStretch()
 
     def _build_rom_card(self, variant, rom_snapshot: bytes) -> QWidget:
         """Compact ROM identity card — variant, patches, checksum."""
@@ -1183,8 +1138,8 @@ class OverviewTab(QWidget):
                            "#2dff6e" if cs_ok else "#ffaa00"))
 
         # Patches
-        is_266d = "266D" in variant.part_number
-        if is_266d:
+        is_7a = variant.part_number in ("893906266D", "893906266B")
+        if is_7a:
             maf_state  = hr.detect_maf_patch(rom_snapshot)
             cop_state  = hr.detect_co_pot_patch(rom_snapshot)
             maf_label  = maf_state if isinstance(maf_state, str) else str(maf_state)
@@ -1249,24 +1204,14 @@ class OverviewTab(QWidget):
         v.addWidget(sep)
         return w
 
-    def _on_field_selected(self, field: "OverviewField"):
-        self._tips_panel.update_map(
-            field.map_def.name,
-            map_def=field.map_def,
-            info=_MAP_TIPS.get(field.map_def.name))
-
     def show_first_tip(self):
-        if self._fields:
-            self._on_field_selected(self._fields[0])
+        pass  # no tips panel on Overview any more
 
     def build_patches(self) -> dict:
-        patch = {}
-        for f in self._fields:
-            patch.update(f.build_patch())
-        return patch
+        return {}
 
     def changed_count(self) -> int:
-        return sum(f.changed_count() for f in self._fields)
+        return 0
 
 
 # ---------------------------------------------------------------------------
@@ -1285,9 +1230,12 @@ class HardwareTab(QWidget):
 
     def __init__(self, rom_data: bytes, variant, parent=None):
         super().__init__(parent)
-        self._rom      = rom_data
-        self._variant  = variant
-        self._is_266d  = variant and "266D" in variant.part_number
+        self._rom       = rom_data
+        self._variant   = variant
+        self._snapshot  = rom_data   # for OverviewField scalar editors
+        # 7A ECUs (both 266D and 266B) support MAF axis and CO pot patches
+        self._is_7a    = variant and variant.part_number in ('893906266D', '893906266B')
+        self._is_266d  = variant and '266D' in variant.part_number
         self._build_ui()
 
     def _build_ui(self):
@@ -1305,17 +1253,56 @@ class HardwareTab(QWidget):
         scroll.setWidget(inner)
         root.addWidget(scroll)
 
+        # ── REV LIMIT + ECU PARAMETERS ────────────────────────────────────────
+        if self._variant:
+            rpm_maps = [m for m in self._variant.maps if m.name == "RPM Limit"]
+            param_names = ["Injection Scaler", "CL Disable RPM", "CL RPM Limit"]
+            param_maps  = [m for m in self._variant.maps if m.name in param_names]
+            param_maps.sort(key=lambda m: param_names.index(m.name)
+                            if m.name in param_names else 99)
+            has_scaler = any(m.name == "Injection Scaler" for m in self._variant.maps)
+
+            if rpm_maps or param_maps:
+                layout.addWidget(self._section_header(
+                    "REV LIMIT & ECU PARAMETERS",
+                    "Single-byte scalars. Change a value, click Apply, "
+                    "then Save 27C512 and burn the chip."))
+
+                self._scalar_fields: list[OverviewField] = []
+
+                if rpm_maps:
+                    f = OverviewField(rpm_maps[0], self._snapshot)
+                    f.changed.connect(self._on_scalar_changed)
+                    self._scalar_fields.append(f)
+                    layout.addWidget(f)
+
+                for m in param_maps:
+                    f = OverviewField(m, self._snapshot)
+                    f.changed.connect(self._on_scalar_changed)
+                    self._scalar_fields.append(f)
+                    layout.addWidget(f)
+
+                if not has_scaler:
+                    note = QLabel(
+                        "Injection Scaler not present on this variant — "
+                        "injector pulse is fixed in firmware. Tune via fuel map.")
+                    note.setWordWrap(True)
+                    note.setStyleSheet("color:#555; font-size:11px;")
+                    layout.addWidget(note)
+
+        layout.addWidget(self._divider())
+
         # ── MAF SENSOR ───────────────────────────────────────────────────────
         layout.addWidget(self._section_header(
             "MAF SENSOR",
             "Select the MAF sensor housing fitted to your engine. "
-            "The ECU axis bytes are rewritten to match the new housing bore. "
-            "266D only — 266B uses a different linearisation table."))
+            "Rewrites the ECU's MAF voltage→load axis for the new housing bore. "
+            "Supported on 266D (MMS05C) and 266B (MMS-04B)."))
 
         maf_row = QHBoxLayout()
         maf_row.setSpacing(12)
 
-        if self._is_266d:
+        if self._is_7a:
             maf_state = hr.detect_maf_patch(self._rom)
             maf_colour = "#aaa" if maf_state == "stock_7a" else "#2dff6e"
             self.lbl_maf = QLabel(f"Current profile:  {maf_state}")
@@ -1330,7 +1317,7 @@ class HardwareTab(QWidget):
             maf_row.addWidget(self.lbl_maf, 1)
             maf_row.addWidget(self.btn_maf)
         else:
-            lbl = QLabel("MAF axis patch not available on this variant (266D only).")
+            lbl = QLabel("MAF axis patch not available on this variant.")
             lbl.setStyleSheet("color:#555; font-size:11px;")
             maf_row.addWidget(lbl)
         layout.addLayout(maf_row)
@@ -1349,7 +1336,7 @@ class HardwareTab(QWidget):
         cop_row = QHBoxLayout()
         cop_row.setSpacing(12)
 
-        if self._is_266d:
+        if self._is_7a:
             cop_state  = hr.detect_co_pot_patch(self._rom)
             cop_colour = "#2dff6e" if cop_state == "patched" else "#ffaa00"
             self.lbl_cop = QLabel(f"Current state:  {cop_state}")
@@ -1364,7 +1351,7 @@ class HardwareTab(QWidget):
             cop_row.addWidget(self.lbl_cop, 1)
             cop_row.addWidget(self.btn_cop)
         else:
-            lbl = QLabel("CO pot patch not available on this variant (266D only).")
+            lbl = QLabel("CO pot patch not available on this variant (266D / 266B only).")
             lbl.setStyleSheet("color:#555; font-size:11px;")
             cop_row.addWidget(lbl)
         layout.addLayout(cop_row)
@@ -1453,6 +1440,20 @@ class HardwareTab(QWidget):
         sep.setStyleSheet("color:#1e1e1e; margin:4px 0;")
         return sep
 
+    def _on_scalar_changed(self):
+        """Propagate scalar field edits up to MainWindow."""
+        self.patch_requested.emit("scalar", None)
+
+    def build_patches(self) -> dict:
+        """Return merged patch dict from all scalar fields."""
+        patch = {}
+        for f in getattr(self, '_scalar_fields', []):
+            patch.update(f.build_patch())
+        return patch
+
+    def changed_count(self) -> int:
+        return sum(f.changed_count() for f in getattr(self, '_scalar_fields', []))
+
     def _open_maf(self):
         dlg = MafPatchDialog(self._rom, parent=self)
         if dlg.exec_() == QDialog.Accepted:
@@ -1491,7 +1492,7 @@ class HardwareTab(QWidget):
     def update_rom(self, rom_data: bytes):
         """Refresh patch state labels after ROM is modified."""
         self._rom = rom_data
-        if self._is_266d:
+        if self._is_7a:
             maf_state  = hr.detect_maf_patch(rom_data)
             cop_state  = hr.detect_co_pot_patch(rom_data)
             maf_colour = "#aaa" if maf_state == "stock_7a" else "#2dff6e"
@@ -2502,6 +2503,20 @@ class MainWindow(QMainWindow):
         splitter.setSizes([900, 320])
         root.addWidget(splitter, 1)
 
+        # ── Tooltip strip — 40px fixed height bar above status bar ───────────
+        self._tip_strip = QLabel("")
+        self._tip_strip.setFixedHeight(40)
+        self._tip_strip.setWordWrap(True)
+        self._tip_strip.setAlignment(Qt.AlignVCenter | Qt.AlignLeft)
+        self._tip_strip.setStyleSheet(
+            "background:#131313; color:#777; font-size:11px; "
+            "padding:0 12px; border-top:1px solid #222;")
+        self._tip_strip.setText(
+            "Open a .bin or .034 ROM file to begin  ·  "
+            "Supported: 266D (MMS05C)  266B (MMS-04B)  4A0906266 (MMS100)  "
+            "8A0906266A (MMS-200)")
+        root.addWidget(self._tip_strip)
+
         welcome = QLabel(
             f"HachiROM  v{APP_VERSION}\n\n"
             "Open a .bin or .034 ROM file to begin.\n\n"
@@ -2544,8 +2559,11 @@ class MainWindow(QMainWindow):
             self._apply_maf_patch_from_dialog(dlg)
         elif patch_type == "copot":
             self._apply_copot_patch_from_dialog(dlg)
+        elif patch_type == "scalar":
+            # Scalar field edited — just trigger a ROM rebuild/refresh
+            self._on_rom_changed()
         elif patch_type == "inj_trick":
-            patched, halve = dlg  # dlg is (patched_bytes, halve_bool) for this type
+            patched, halve = dlg
             self._rom_snapshot = patched
             self._load_rom(self.current_path)
             action = "halved to 50 (high-resolution mode)" if halve else "restored to 100 (standard)"
@@ -2572,12 +2590,42 @@ class MainWindow(QMainWindow):
                 map_def=widget.map_def,
                 info=_MAP_TIPS.get(widget.map_def.name),
             )
+            tip = _MAP_TIPS.get(widget.map_def.name, {})
+            tip_text = tip.get("what", "")
+            if tip_text:
+                # Truncate to one sentence for the strip
+                tip_text = tip_text.split(".")[0] + "."
+            self._update_tip_strip(f"{widget.map_def.name}  ·  {tip_text}")
         elif "Compare" in name:
             self.map_panel.update_map("Compare", info=_COMPARE_PANEL)
+            self._update_tip_strip(
+                "Compare tab  ·  Load ROM A (baseline) and ROM B (modified) "
+                "to see exactly which bytes changed.")
         elif "Hex" in name:
             self.map_panel.update_map("Hex Dump", info=_HEX_PANEL)
+            self._update_tip_strip(
+                "Hex viewer  ·  Raw bytes of the assembled working ROM. "
+                "Refreshes when you switch to this tab.")
+        elif "Hardware" in name:
+            self._update_tip_strip(
+                "Hardware tab  ·  RPM limit · ECU scalars · MAF axis patch · "
+                "CO pot patch · Injection scaler resolution · Injector/FPR calculator.")
+        elif "Overview" in name:
+            self._update_tip_strip(
+                "Overview  ·  ROM identity, variant, checksum, and detected patch states.")
+        elif "Scalars" in name:
+            self._update_tip_strip(
+                "Scalars reference  ·  All confirmed ROM addresses from physical EPROM read. "
+                "Values update live as you edit.")
         else:
             self.map_panel.update_map("HachiROM", info=_WELCOME_PANEL)
+            self._update_tip_strip(
+                "HachiROM  ·  Open a .bin or .034 ROM file to begin.")
+
+    def _update_tip_strip(self, text: str):
+        """Update the 40px tooltip strip at the bottom of the window."""
+        if hasattr(self, '_tip_strip'):
+            self._tip_strip.setText(text)
 
     def open_rom(self):
         path, _ = QFileDialog.getOpenFileName(
@@ -2630,14 +2678,20 @@ class MainWindow(QMainWindow):
         self._scalars_tab   = None
 
         if result.variant:
-            # Overview tab — ROM identity + scalar editors
+            # Overview tab — ROM identity card (position 0)
             self._overview_tab = OverviewTab(result.variant, self._rom_snapshot)
             for field in self._overview_tab._fields:
                 field.changed.connect(self._on_rom_changed)
             self._overview_tab.show_first_tip()
             self.tabs.insertTab(0, self._overview_tab, "Overview")
 
-            # Map tabs
+            # Hardware tab — position 1, right next to Overview
+            self._hardware_tab = HardwareTab(
+                self._rom_snapshot, result.variant)
+            self._hardware_tab.patch_requested.connect(self._on_hardware_patch)
+            self.tabs.insertTab(1, self._hardware_tab, "⚙ Hardware")
+
+            # Map tabs — after Hardware
             editable = [m for m in result.variant.maps
                         if m.is_2d or (m.cols > 1
                             and not m.name.lower().startswith("rpm")
@@ -2647,12 +2701,6 @@ class MainWindow(QMainWindow):
                 tab.rom_changed.connect(self._on_rom_changed)
                 self._map_tabs.append(tab)
                 self.tabs.addTab(tab, m.name)
-
-            # Hardware tab — MAF, CO pot, injector calc
-            self._hardware_tab = HardwareTab(
-                self._rom_snapshot, result.variant)
-            self._hardware_tab.patch_requested.connect(self._on_hardware_patch)
-            self.tabs.addTab(self._hardware_tab, "⚙ Hardware")
         else:
             self._overview_tab = None
 
@@ -2680,7 +2728,12 @@ class MainWindow(QMainWindow):
         """Assemble current ROM from snapshot + in-memory edits, then apply
         checksum correction. Nothing is mutated until this is called."""
         rom = bytearray(self._rom_snapshot[:32768])
-        # Overview tab fields take priority — apply first, map tabs may overlap
+        # Hardware tab scalars (RPM limit, injection scaler, CL)
+        if self._hardware_tab:
+            for offset, byte in self._hardware_tab.build_patches().items():
+                if offset < len(rom):
+                    rom[offset] = byte
+        # Overview tab fields (now empty — kept for compatibility)
         if self._overview_tab:
             for offset, byte in self._overview_tab.build_patches().items():
                 if offset < len(rom):
@@ -2793,10 +2846,11 @@ class MainWindow(QMainWindow):
         """Open the MAF sensor patch dialog (legacy toolbar entry point)."""
         if not self._rom_snapshot:
             return
-        if not (self.current_variant and self.current_variant.version_key == "266D"):
+        if not (self.current_variant and self.current_variant.part_number in
+                ("893906266D", "893906266B")):
             QMessageBox.information(
                 self, "MAF Patch",
-                "MAF axis patching is only supported for the 266D (7A Late) ECU.")
+                "MAF axis patching is supported on 266D and 266B only.")
             return
         dlg = MafPatchDialog(self._rom_snapshot, parent=self)
         if dlg.exec_() == QDialog.Accepted:
@@ -2808,10 +2862,11 @@ class MainWindow(QMainWindow):
         """Open the CO pot patch dialog (legacy toolbar entry point)."""
         if not self._rom_snapshot:
             return
-        if not (self.current_variant and self.current_variant.version_key == "266D"):
+        if not (self.current_variant and self.current_variant.part_number in
+                ("893906266D", "893906266B")):
             QMessageBox.information(
                 self, "CO Pot Patch",
-                "CO pot patching is only supported for the 266D (7A Late) ECU.")
+                "CO pot patching is supported on 266D and 266B only.")
             return
         dlg = CoPotPatchDialog(self._rom_snapshot, parent=self)
         if dlg.exec_() == QDialog.Accepted:
