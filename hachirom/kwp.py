@@ -82,14 +82,20 @@ class LiveValues:
             return c["value"] if c else None
 
         self.coolant  = _val(1)   # °C decoded
-        self.load     = _val(2)   # raw
+        self.load     = _val(2)   # raw (7A: ADC 1-255, AAH: calculated %)
         self.rpm      = _val(3)   # RPM decoded
         self.lambda_  = _val(8)   # λ decoded (128 raw = 1.0)
         self.timing   = _val(10)  # °BTDC decoded
         self.battery  = _val(4)   # V if present
 
         if self.load is not None:
-            self.load_pct = (self.load / 255.0) * 100.0
+            # 7A reports raw ADC (1-255) → convert to %
+            # AAH reports calculated load (already 0-100 range)
+            # Detect: if value > 100 it must be raw ADC
+            if self.load > 100:
+                self.load_pct = (self.load / 255.0) * 100.0
+            else:
+                self.load_pct = self.load   # already a percentage
 
     @property
     def valid(self) -> bool:
