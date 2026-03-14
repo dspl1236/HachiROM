@@ -155,29 +155,108 @@ untouched.
 ### CO pot — pin 4 (applies to all no-pot sensor conversions)
 
 Pin 4 on the 7A MAF connector is an **input to the ECU**.  The stock Hitachi
-sensor contains an internal CO pot whose wiper feeds a voltage (approximately
-1.0–7.5 V within a 0–5 V ADC window) back to the ECU on pin 4.  The ECU uses
-this at idle only to apply a small lambda trim correction.
+sensor contains an internal CO pot whose wiper feeds a voltage back to the ECU
+on pin 4.  The ECU uses this at idle only to apply a small lambda trim
+correction — it was an emissions adjustment tool so a technician could turn the
+pot during an annual inspection to make the car pass the CO exhaust test.
 
-The Bosch 1.8T sensor has no CO pot.  Without intervention the ECU will:
-- Store fault **00521** "CO-Poti Unterbrechung oder Kurzschluss" on every key cycle
-- Apply an unpredictable idle trim based on whatever voltage appears on pin 4
+---
 
-**Recommended fix: ROM patch (HachiROM CO Pot button)**
+#### What the ECU does with pin 4
 
-Use the **CO Pot** button in HachiROM to apply the CO pot disable patch.
-This widens the fault thresholds to 0–5 V and zeros the trim gain — pin 4 can
-be left **unconnected** without any fault code or fuelling effect.
+The ECU reads pin 4 via an 8-bit ADC (0 V = 0, 5 V = 255).  On every idle
+cycle it compares the ADC reading against a neutral target and applies a small
+fuel trim proportional to the deviation.  Five scalars in the ROM control this
+behaviour:
 
-Patch bytes written:
+| Address  | Name           | Stock value   | Role |
+|----------|----------------|---------------|------|
+| `0x0762` | Low threshold  | `0x0A` (10)   | ADC counts below this → fault 00521 (open circuit) |
+| `0x0763` | High threshold | `0xEE` (238)  | ADC counts above this → fault 00521 (short circuit) |
+| `0x0777` | Neutral target | `0x80` (128)  | ADC midpoint = no trim (pot centred ≈ 2.5 V) |
+| `0x0778` | Window         | `0x32` (50)   | Trim only active within ±50 counts of neutral |
+| `0x0779` | Gain           | `0x04` (4)    | Fuel trim applied per ADC count of deviation |
 
-| Address  | Stock value | Patched value | Effect                          |
-|----------|-------------|---------------|---------------------------------|
-| `0x0762` | `0x0A` (10) | `0x00` (0)    | Low fault threshold → 0 V       |
-| `0x0763` | `0xEE` (238)| `0xFF` (255)  | High fault threshold → 5 V      |
-| `0x0779` | `0x04` (4)  | `0x00` (0)    | Trim gain zeroed → no effect    |
+The trim loop runs approximately:
 
-No external hardware required when this patch is applied.
+```
+deviation = adc_pin4 - neutral_target        // signed, range ±50
+if |deviation| <= window:
+    fuel_trim += deviation * gain            // small correction each idle cycle
+```
+
+With the stock pot centred at `0x80` (128 ADC counts ≈ 2.5 V), deviation is
+zero and no trim is applied.  A technician turning the pot shifts the wiper
+voltage and the ECU richens or leans the idle mixture accordingly.
+
+If the pot is **missing, disconnected, disturbed, or replaced by a 3-wire
+sensor**, pin 4 floats to an unpredictable voltage.  The ECU then either:
+- Triggers fault **00521** `CO-Poti Unterbrechung oder Kurzschluss` if the
+  voltage falls outside the `0x0762`–`0x0763` window
+- Applies a continuous non-zero trim if the voltage lands inside the window
+  but away from neutral — causing hunting, rough idle, and exhaust popping
+  on overrun as the ECU fights its own fuel map
+
+---
+
+#### The ROM patch — three bytes, full effect
+
+The CO pot disable patch works by attacking all three pathways simultaneously:
+
+**1. Widen the fault thresholds to the full ADC range**
+
+```
+0x0762: 0x0A → 0x00   (low threshold: 0.20 V → 0 V)
+0x0763: 0xEE → 0xFF   (high threshold: 4.67 V → 5 V)
+```
+
+This tells the ECU that any voltage on pin 4 is "valid" — the full 0–5 V
+range is within spec.  Fault 00521 cannot fire regardless of what pin 4 sees,
+including a completely floating or open-circuit input.
+
+**2. Zero the trim gain**
+
+```
+0x0779: 0x04 → 0x00   (gain: 4 → 0)
+```
+
+With gain = 0, the trim calculation produces zero output regardless of
+deviation from neutral.  Even if pin 4 has a voltage and the ECU reads it,
+the result multiplied by zero is zero — no fuelling effect whatsoever.
+
+The neutral target (`0x0777 = 0x80`) and window (`0x0778 = 0x32`) are left
+unchanged.  With gain = 0 they are mathematically irrelevant, but leaving them
+at stock values makes the patch cleaner to detect and easier to reverse.
+
+**Net result:** pin 4 is electrically inert.  Leave it unconnected.  The ECU
+reads it, calculates a deviation, multiplies by zero, and moves on.  No fault,
+no trim, no interaction with the fuel map.
+
+---
+
+#### Confirming the patch is applied
+
+In HachiROM, open the **⚙ Scalars** tab after patching and verify:
+
+| Address  | Patched value |
+|----------|---------------|
+| `0x0762` | `0x00` (0)    |
+| `0x0763` | `0xFF` (255)  |
+| `0x0779` | `0x00` (0)    |
+
+The **Hardware tab → CO Pot** section shows `patched` when all three bytes are
+at their patched values, `stock` when restored to stock, and `unknown` if any
+byte is at a non-standard value.
+
+---
+
+**Applying the patch: HachiROM Hardware tab → CO Pot**
+
+Open the ROM in HachiROM, go to the **Hardware** tab, and click
+**Change CO Pot State…** → select **Disabled**.  Save and burn.  Pin 4 can
+then be left **unconnected** with no fault code or fuelling effect.
+
+No external hardware required.
 
 **Alternative: external adjustable pot (if ROM patch is not desired)**
 
@@ -195,9 +274,8 @@ Pin 3 (+12 V) ──┬── [pot pin 3]
 Pin 2 (GND) ────┘
 ```
 
-Adjust the wiper to produce a voltage within the ECU's valid window
-(approximately 0.20–4.67 V measured at pin 4) to avoid fault 00521.
-This replicates the original CO pot behaviour and allows idle trim adjustment.
+Adjust the wiper to produce approximately 2.5 V at pin 4 (neutral = 128 ADC
+counts) to centre the trim at zero and keep clear of both fault thresholds.
 
 ---
 
