@@ -289,3 +289,49 @@ counts) to centre the trim at zero and keep clear of both fault thresholds.
 
 Both patches are applied via HachiROM and are independently reversible.
 Apply the MAF patch first, then the CO pot patch, then save and burn the ROM.
+
+---
+
+## 7A Hardware Versions — MMS-04B vs MMS05C
+
+The 7A engine was produced in two distinct hardware versions, split at the
+March 1990 production date (3/90).  The ECU variant directly reflects this:
+
+| Feature                  | Pre-3/90 — 266B (MMS-04B)         | Post-3/90 — 266D (MMS05C)         |
+|--------------------------|------------------------------------|------------------------------------|
+| ECU connector            | 2-plug                             | 4-plug                             |
+| ISV (idle stabiliser)    | Rotary valve (old style)           | New style solenoid valve           |
+| Exhaust manifold         | Tubular/fabricated (Fächerkrümmer) | Cast iron (Gusskrümmer)            |
+| TPS connector            | 2-connector                        | Single central connector           |
+| Evap purge solenoids     | 1 solenoid                         | 2 solenoids                        |
+| MAF connector            | 4-pin (same sensor, same element)  | 4-pin (same sensor, same element)  |
+| CO set procedure         | Manual — tester at exhaust probe   | VAG 1551 / VCDS measuring block 8  |
+| Diagnostic bridge        | Required during CO setup (7/88–3/90)| Not required — VAG tool only      |
+
+*Source: 20v-sauger-tuning.de — unterscheidungsmerkmale_mpi.htm,
+grundeinstellung_bis_390.htm, grundeinstellung_ab_390.htm*
+
+### CO setting procedure — post-3/90 (266D / MMS05C)
+
+The new-version CO procedure reads measuring block value 8 via VAG 1551 or
+VCDS and adjusts the CO pot screw until the displayed value reaches **128**.
+
+This directly corresponds to ROM address `0x0777` — the CO pot neutral target
+byte, stock value `0x80` (128).  The ECU reports the current ADC reading on
+pin 4 as measuring block 8, and the technician turns the pot until it matches
+the stored neutral target.  With the screw centred at 128, deviation = 0 and
+the trim gain has no effect — the factory intended this as the correct idle
+mixture set point.
+
+This confirms why the CO pot patch works:
+- Neutral target `0x0777 = 128` is unchanged — the ECU still reports block 8
+- Gain `0x0779 = 0` means the reported value has no fuelling effect
+- Thresholds `0x0762/63 = 0x00/0xFF` prevent any fault regardless of pin 4
+
+### CO setting procedure — pre-3/90 (266B / MMS-04B)
+
+The old-version procedure uses a separate exhaust CO analyser — there is no
+VAG measuring block for CO on the 2-plug ECU.  Idle speed (screw 1 on throttle
+body) and CO content (screw 2 on MAF) are set together manually, targeting
+0.5–1.0 Vol.% CO at idle.  A diagnostic bridge must be jumpered at the
+connector during setup on vehicles built between 7/88 and 3/90.
