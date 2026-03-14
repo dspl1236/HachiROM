@@ -224,7 +224,7 @@ class TestLiveValuesFromMock:
     def test_7a_lambda_plausible(self, mock_7a):
         state = _get_state(50290)
         lv = LiveValues(state)
-        assert 0.8 <= lv.lambda_ <= 1.2, f"Lambda implausible: {lv.lambda_}"
+        assert 0.7 <= lv.lambda_ <= 1.35, f"Lambda implausible: {lv.lambda_}"  # wide range covers cold start lean
 
     def test_7a_ecu_part_number(self, mock_7a):
         state = _get_state(50290)

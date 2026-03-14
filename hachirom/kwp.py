@@ -74,19 +74,46 @@ class LiveValues:
         self.ecu_pn = state.get("ecu_id", {}).get("part_number", "")
 
         groups = state.get("groups", {})
+
+        # Primary group — always broadcast as "0" by mock server
         group0 = groups.get("0", groups.get(0, {}))
         cells  = {c["index"]: c for c in group0.get("cells", [])}
 
+        # Detect cell layout by ECU part number family
+        # Digifant 1 (037-906-xxx): RPM=cell1, load=cell2, coolant=cell3
+        # 7A / AAH (893906266x, 4A0906266x): RPM=cell3, load=cell2, coolant=cell1
+        pn_upper = self.ecu_pn.upper()
+        is_digifant = pn_upper.startswith("037906") or pn_upper.startswith("039906")
+
+        if is_digifant:
+            # Digifant 1 group 1 layout (sent as group 0 by mock)
+            rpm_cell     = 1
+            load_cell    = 2
+            coolant_cell = 3
+            lambda_cell  = None   # O2S is voltage in separate group, not λ
+            timing_cell  = None
+            battery_cell = None
+        else:
+            # 7A / AAH / Motronic layout — group 0
+            rpm_cell     = 3
+            load_cell    = 2
+            coolant_cell = 1
+            lambda_cell  = 8
+            timing_cell  = 10
+            battery_cell = 4
+
         def _val(idx):
+            if idx is None:
+                return None
             c = cells.get(idx)
             return c["value"] if c else None
 
-        self.coolant  = _val(1)   # °C decoded
-        self.load     = _val(2)   # raw (7A: ADC 1-255, AAH: calculated %)
-        self.rpm      = _val(3)   # RPM decoded
-        self.lambda_  = _val(8)   # λ decoded (128 raw = 1.0)
-        self.timing   = _val(10)  # °BTDC decoded
-        self.battery  = _val(4)   # V if present
+        self.coolant  = _val(coolant_cell)
+        self.load     = _val(load_cell)
+        self.rpm      = _val(rpm_cell)
+        self.lambda_  = _val(lambda_cell)
+        self.timing   = _val(timing_cell)
+        self.battery  = _val(battery_cell)
 
         if self.load is not None:
             # 7A reports raw ADC (1-255) → convert to %
