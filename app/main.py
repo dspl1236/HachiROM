@@ -11,7 +11,7 @@ from PyQt5.QtWidgets import (
     QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QFileDialog,
     QTableWidget, QTableWidgetItem, QStatusBar, QMessageBox,
     QTextEdit, QSplitter, QAction, QHeaderView, QDialog,
-    QDialogButtonBox, QFrame, QLineEdit, QScrollArea
+    QDialogButtonBox, QFrame, QLineEdit, QScrollArea, QComboBox
 )
 from PyQt5.QtCore import Qt, pyqtSignal
 from PyQt5.QtGui import QColor, QFont, QBrush
@@ -1472,6 +1472,67 @@ class HardwareTab(QWidget):
 
         layout.addWidget(self._divider())
 
+        # ── PIN 4 USE ─────────────────────────────────────────────────────────
+        # Pin 4 is only free when a no-CO-pot sensor is fitted (3-wire AAH,
+        # or 1.8T) and the CO pot patch is applied.
+        pin4_available = (
+            self._is_7a and
+            self._variant is not None
+        )
+
+        layout.addWidget(self._section_header(
+            "PIN 4 — FREED ADC INPUT",
+            "When a 3-wire MAF sensor is fitted (AAH V6 stock, 1.8T) or the "
+            "CO pot patch is applied, ECU pin 4 becomes a free 0–5V ADC input. "
+            "Select how you intend to use it — this generates wiring notes and "
+            "configures the Teensy logging channel. "
+            "ROM correction tables are planned for a future release."))
+
+        pin4_row = QHBoxLayout()
+        pin4_row.setSpacing(12)
+
+        lbl_p4 = QLabel("Pin 4 use:")
+        lbl_p4.setFixedWidth(80)
+        lbl_p4.setStyleSheet("color:#888; font-size:12px;")
+
+        self.combo_pin4 = QComboBox()
+        self.combo_pin4.setFixedWidth(260)
+        self.combo_pin4.setStyleSheet(
+            "QComboBox { background:#2a2a2a; color:#e0e0e0; border:1px solid #444; "
+            "border-radius:3px; padding:4px 8px; font-size:12px; }"
+            "QComboBox::drop-down { border:none; }"
+            "QComboBox QAbstractItemView { background:#2a2a2a; color:#e0e0e0; "
+            "selection-background-color:#1a4a1a; }")
+
+        self._pin4_options = [
+            ("unconnected",   "Unconnected (CO pot patch, pin 4 open)"),
+            ("wideband",      "Wideband O2 — 0–5V analog (Innovate/AEM)"),
+            ("map_sensor",    "MAP sensor — 0–5V absolute pressure"),
+            ("iat",           "IAT sensor — NTC thermistor (e.g. 1.8T integrated)"),
+            ("raw_log",       "Raw ADC logging — Teensy data capture"),
+        ]
+        for key, label in self._pin4_options:
+            self.combo_pin4.addItem(label, key)
+
+        self.combo_pin4.currentIndexChanged.connect(self._on_pin4_changed)
+
+        pin4_row.addWidget(lbl_p4)
+        pin4_row.addWidget(self.combo_pin4)
+        pin4_row.addStretch()
+        layout.addLayout(pin4_row)
+
+        # Pin 4 info panel — updates with wiring notes per selection
+        self.lbl_pin4_info = QLabel("")
+        self.lbl_pin4_info.setWordWrap(True)
+        self.lbl_pin4_info.setTextFormat(Qt.RichText)
+        self.lbl_pin4_info.setStyleSheet(
+            "font-size:11px; color:#888; background:#1a1a1a; "
+            "border-radius:4px; padding:8px; margin-top:4px;")
+        layout.addWidget(self.lbl_pin4_info)
+        self._on_pin4_changed(0)   # populate initial text
+
+        layout.addWidget(self._divider())
+
         # ── INJECTION SCALER TRICK ────────────────────────────────────────────
         is_aah = self._variant and self._variant.version_key in ('AAH', 'MMS200')
         if is_aah:
@@ -1553,6 +1614,67 @@ class HardwareTab(QWidget):
         sep.setFrameShape(QFrame.HLine)
         sep.setStyleSheet("color:#1e1e1e; margin:4px 0;")
         return sep
+
+    def _on_pin4_changed(self, index: int):
+        """Update the pin 4 info panel with wiring notes for the selected use."""
+        key = self.combo_pin4.itemData(index) if hasattr(self, 'combo_pin4') else 'unconnected'
+
+        notes = {
+            'unconnected': (
+                "<b>No connection required.</b><br>"
+                "CO pot patch must be applied (Hardware tab → CO Pot). "
+                "Pin 4 floats — the ECU reads it but gain=0 so no fuelling effect. "
+                "No fault 00521 will fire."
+            ),
+            'wideband': (
+                "<b>Wideband O2 — analog 0–5V output</b><br>"
+                "Connect wideband controller analog output to MAF pin 4. "
+                "Innovate LC-2: 0V=7.4 AFR → 5V=22.4 AFR (stoich ~2.4V). "
+                "AEM UEGO: 0V=8.5 AFR → 5V=18.0 AFR (stoich ~3.3V).<br><br>"
+                "<b>Wiring:</b> Wideband analog out → MAF connector pin 4.<br>"
+                "<b>Teensy:</b> Also tap pin 4 to a Teensy analog input for logging. "
+                "16-point axis gives ~0.6–0.9 AFR/step resolution.<br>"
+                "<b>ROM:</b> CO pot patch required. No ROM correction table yet — "
+                "data logging only via Teensy."
+            ),
+            'map_sensor': (
+                "<b>MAP sensor — 0–5V absolute pressure</b><br>"
+                "Use a 1-bar or 2-bar absolute MAP sensor "
+                "(e.g. Bosch 0261230036, GM 3 bar, or similar 0–5V output).<br><br>"
+                "<b>Wiring:</b> MAP sensor signal → MAF connector pin 4. "
+                "MAP sensor +5V → ignition-switched 5V supply. "
+                "MAP sensor GND → chassis ground.<br>"
+                "<b>Vacuum port:</b> Tee into intake manifold vacuum line.<br>"
+                "<b>Teensy:</b> Tap pin 4 to Teensy analog input. "
+                "1 bar abs = ~1V (ADC 51), 2 bar abs = ~2.5V (ADC 128).<br>"
+                "<b>ROM:</b> CO pot patch required. MAP load axis replacement "
+                "is a future research item — logging only for now."
+            ),
+            'iat': (
+                "<b>IAT sensor — NTC thermistor</b><br>"
+                "The Bosch 1.8T 5-pin MAF (ATW/AUG/AWM) has an integrated IAT "
+                "on pins 1 (signal) and 4 (5V reference) — currently left open "
+                "on the 7A ECU. If using a standalone NTC IAT sensor:<br><br>"
+                "<b>Wiring:</b> NTC one leg → MAF connector pin 4. "
+                "NTC other leg → 5V via 2.2kΩ pull-up resistor. "
+                "Result: voltage divider gives 0–5V proportional to temperature.<br>"
+                "<b>Curve:</b> Same NTC family as coolant sensor — "
+                "~4.8V at -20°C, ~2.5V at +20°C, ~0.6V at +80°C.<br>"
+                "<b>Teensy:</b> Tap pin 4 for logging. 16-point axis ≈ 7°C/step.<br>"
+                "<b>ROM:</b> CO pot patch required. IAT correction table planned."
+            ),
+            'raw_log': (
+                "<b>Raw ADC logging — Teensy data capture</b><br>"
+                "Tap MAF connector pin 4 to a Teensy analog input. "
+                "The ECU ADC still reads the pin (gain=0, no effect). "
+                "Connect any 0–5V sensor and log the raw ADC value alongside "
+                "map slot, RPM, and other Teensy channels.<br><br>"
+                "<b>Wiring:</b> Sensor signal → MAF connector pin 4 AND → Teensy analog in.<br>"
+                "<b>Use for:</b> Prototyping a new sensor before writing a ROM correction table."
+            ),
+        }
+
+        self.lbl_pin4_info.setText(notes.get(key, ""))
 
     def _on_scalar_changed(self):
         """Propagate scalar field edits up to MainWindow."""
