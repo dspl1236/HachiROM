@@ -2409,7 +2409,7 @@ class MainWindow(QMainWindow):
             "Open a .bin or .034 ROM file to begin.\n\n"
             "Supported ECUs — Hitachi MMS family\n"
             "  MMS05C  893906266D — 7A Late  (Audi 80/90/Coupe Quattro 2.3 20v, 1991–1995, 4-pin MAF)\n"
-            "  MMS05C  893906266B — 7A Early (Audi 80/90/Coupe Quattro 2.3 20v, pre-1991, 4-pin MAF)\n"
+            "  MMS-04B 893906266B — 7A Early (Audi 80/90/Coupe Quattro 2.3 20v, pre-1991, 4-pin MAF)\n"
             "  MMS100  4A0906266  — AAH 12v  (Audi 100 C4 / S4 C4 2.8 V6 12v, 3-pin MAF, calc load)\n"
             "  MMS-200 8A0906266A — AAH/ACK  (Audi 90/A6/100 C4 2.8 V6 12v, 1992–1995)\n"
             "  MMS-300 8A0906266B — AAH/ACK  (Audi 2.8 V6 later revision)  [stub — ROM wanted]\n\n"

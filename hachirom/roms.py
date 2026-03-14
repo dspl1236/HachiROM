@@ -443,7 +443,7 @@ ROM_266D = ROMVariant(
 
 
 # ---------------------------------------------------------------------------
-# 266B — Early 7A ECU
+# 266B — Early 7A ECU (MMS-04B hardware platform)
 # Same map layout as 266D except: lambda fuel formula, MAF linearisation,
 # no injection scaler at 0x077E (different connector, different hardware)
 # ---------------------------------------------------------------------------
@@ -507,9 +507,9 @@ _MAPS_266B = [
 ]
 
 ROM_266B = ROMVariant(
-    name="7A Early", version_key="266B", part_number="893906266B",
+    name="MMS-04B 7A Early", version_key="266B", part_number="893906266B",
     chip="27C512", size=32768,
-    description="Audi 90 / Coupe Quattro 2.3 20v NF/7A — early 2-connector ECU",
+    description="Audi 90 / Coupe Quattro 2.3 20v NF/7A — MMS-04B platform, early 2-connector ECU",
     maps=_MAPS_266B,
     checksum=CHECKSUM_PARAMS["266B"],
     known_crc32s=[0x7739bde5],
@@ -610,7 +610,7 @@ ROM_AAH = ROMVariant(
 # Hardware:
 #   ECU hardware:  Hitachi MMS-200
 #   Part number:   8A0 906 266 A
-#   Connector:     2-plug (same physical style as 266B)
+#   Connector:     2-plug (same physical style as 266B / MMS-04B)
 #   Engine:        AAH / ACK 2.8L V6 12v
 #   Vehicles:      Audi 90 B4, Audi A6 C4, Audi 100 C4
 #   Years:         1992–1995
