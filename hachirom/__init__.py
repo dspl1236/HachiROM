@@ -29,6 +29,7 @@ from .maps   import (read_map, read_map_decoded, write_map, write_map_encoded,
                      compare_roms, diff_summary, DiffByte,
                      detect_maf_patch, apply_maf_patch,
                      detect_co_pot_patch, apply_co_pot_patch,
+                     detect_injection_scaler_trick, apply_injection_scaler_trick,
                      CO_POT_LOW_THRESHOLD_ADDR, CO_POT_HIGH_THRESHOLD_ADDR,
                      CO_POT_NEUTRAL_ADDR, CO_POT_WINDOW_ADDR, CO_POT_GAIN_ADDR)
 from .roms   import (ROMVariant, MapDef, ALL_VARIANTS,
@@ -44,7 +45,7 @@ from .roms   import (ROMVariant, MapDef, ALL_VARIANTS,
                      MAF_AXIS_1_8T_60, MAF_AXIS_1_8T_VR6,
                      MAF_AXIS_ADDR_FUEL, MAF_AXIS_ADDR_TIMING)
 
-__version__ = "0.6.1"
+__version__ = "0.7.0"
 
 __all__ = [
     "detect", "load_bin", "save_bin", "load_bin_normalised", "DetectionResult",
@@ -54,6 +55,7 @@ __all__ = [
     "compare_roms", "diff_summary", "DiffByte",
     "detect_maf_patch", "apply_maf_patch",
     "detect_co_pot_patch", "apply_co_pot_patch",
+    "detect_injection_scaler_trick", "apply_injection_scaler_trick",
     "CO_POT_LOW_THRESHOLD_ADDR", "CO_POT_HIGH_THRESHOLD_ADDR",
     "CO_POT_NEUTRAL_ADDR", "CO_POT_WINDOW_ADDR", "CO_POT_GAIN_ADDR",
     "ROMVariant", "MapDef", "ALL_VARIANTS",

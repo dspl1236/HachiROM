@@ -353,3 +353,153 @@ def apply_co_pot_patch(data: bytes, disable: bool = True) -> bytes:
     for addr, val in patch_map.items():
         rom[addr] = val
     return bytes(rom)
+
+
+# ---------------------------------------------------------------------------
+# Injection scaler resolution trick — AAH / MMS100 / MMS-200
+# ---------------------------------------------------------------------------
+#
+# The injection scaler at 0x077E is a global multiplier on all injector pulse
+# widths.  Stock AAH = 100 (1.0×).  When set to 50 (0.5×) the injectors fire
+# at half the duration for any given fuel map cell value, so to deliver the
+# same fuelling the fuel map cells must encode twice the lambda value.
+#
+# This doubles the effective resolution of the 8-bit fuel map — each step
+# is half the fuelling change it would be at scaler=100.  034Motorsport used
+# this technique on their Stage 1 AAH tune.
+#
+# IMPORTANT: This patch only rescales the existing fuel map mathematically.
+# It does NOT reproduce the 034 Stage 1 tune — 034 also retuned the map
+# values themselves.  This patch is useful for:
+#   - Tuning with higher resolution starting from a stock baseline
+#   - Round-tripping a rescaled ROM back to stock encoding for comparison
+#
+# Fuel map encoding (AAH / 266B):
+#   lambda = signed(byte) × 0.007813 + 1.0
+#   signed(byte) = (lambda - 1.0) / 0.007813
+#
+# Rescale from scaler=100 → scaler=50:
+#   To deliver the same fuelling: new_lambda = old_lambda × 2.0
+#   new_signed = (old_lambda × 2.0 - 1.0) / 0.007813
+#   new_raw    = new_signed & 0xFF  (two's complement)
+#
+# Rescale from scaler=50 → scaler=100 (reverse):
+#   old_lambda = (new_lambda + 1.0) / 2.0  ... actually:
+#   old_signed = (old_lambda - 1.0) / 0.007813
+#   old_lambda = signed(new_raw) × 0.007813 + 1.0
+#   old_lambda_delivered = old_lambda / 2.0  (at scaler=50)
+#   to restore: old_raw = round((old_lambda_delivered - 1.0) / 0.007813) & 0xFF
+# ---------------------------------------------------------------------------
+
+INJ_SCALER_ADDR  = 0x077E
+INJ_SCALER_STOCK = 100
+INJ_SCALER_HALF  = 50
+
+FUEL_MAP_ADDR    = 0x0000
+FUEL_MAP_SIZE    = 256   # 16×16
+
+_LAMBDA_STEP = 0.007813
+
+
+def detect_injection_scaler_trick(data: bytes, variant_key: str = '') -> str:
+    """
+    Detect whether the injection scaler resolution trick is applied.
+
+    Only meaningful on AAH (4A0906266), MMS-200 (8A0906266A) and 266B
+    (893906266B) — variants where 0x077E is a genuine tunable scaler.
+    On 266D the byte at 0x077E is firmware-fixed at 50 and not a scaler.
+
+    Returns
+    -------
+    'stock'       — scaler=100, fuel map in signed near-zero range (λ≈1.0)
+    'halved'      — scaler=50,  fuel map rescaled (~190-230 raw)
+    'not_applicable' — ROM does not use a tunable injection scaler
+    'unknown'     — scaler or map values don't match either known state
+    """
+    if len(data) < INJ_SCALER_ADDR + 1:
+        return 'unknown'
+
+    scaler = data[INJ_SCALER_ADDR]
+    fuel   = list(data[FUEL_MAP_ADDR:FUEL_MAP_ADDR + FUEL_MAP_SIZE])
+    mean   = sum(fuel) / len(fuel)
+
+    # 266D fuel maps run natively with mean ~225 and scaler=50 is firmware
+    # constant — distinguish by checking if fuel map is signed-near-zero style
+    # AAH stock: mean ~125 (signed values cluster around 0)
+    # AAH halved: mean ~219 (values 190-240)
+    # 266D/266B stock: mean ~220-230 but this is native encoding not a trick
+
+    # Only applicable to variants with a tunable injection scaler
+    # 266D firmware-fixes 0x077E at 50 — not a scaler, not applicable
+    AAH_VARIANTS = {'AAH', 'MMS200'}
+    if variant_key and variant_key not in AAH_VARIANTS:
+        return 'not_applicable'
+
+    # Without variant info, use heuristic: AAH stock mean clusters near 128
+    # 266D/266B native encoding sits at mean ~220-230 (different formula)
+    # If no variant supplied and mean > 175, assume 266D/266B native → not applicable
+    if not variant_key and mean > 175 and scaler == INJ_SCALER_HALF:
+        return 'not_applicable'
+
+    if scaler == INJ_SCALER_STOCK and 100 <= mean <= 160:
+        return 'stock'
+    if scaler == INJ_SCALER_HALF and 180 <= mean <= 240:
+        return 'halved'
+    return 'unknown'
+
+
+def apply_injection_scaler_trick(data: bytes, halve: bool = True) -> bytes:
+    """
+    Apply or reverse the injection scaler resolution trick.
+
+    Mathematically rescales the 16×16 fuel map to maintain equivalent
+    fuelling while halving (or doubling) the injection scaler.
+
+    Parameters
+    ----------
+    data  : raw 32 768-byte AAH / 266B / MMS-200 ROM
+    halve : True  → scaler 100→50, rescale map (higher resolution)
+            False → scaler 50→100, rescale map back to stock encoding
+
+    Raises ``ValueError`` if data is too short or current state conflicts.
+    """
+    if len(data) < INJ_SCALER_ADDR + 1:
+        raise ValueError("ROM data too short for injection scaler patch")
+
+    current_state = detect_injection_scaler_trick(data)
+    if halve and current_state == 'halved':
+        raise ValueError("Injection scaler already halved")
+    if not halve and current_state == 'stock':
+        raise ValueError("Injection scaler already at stock (100)")
+
+    rom    = bytearray(data)
+    fuel   = list(data[FUEL_MAP_ADDR:FUEL_MAP_ADDR + FUEL_MAP_SIZE])
+
+    if halve:
+        # scaler 100 → 50 : double the encoded lambda to maintain fuelling
+        new_scaler = INJ_SCALER_HALF
+        new_fuel   = []
+        for raw in fuel:
+            signed    = raw if raw < 128 else raw - 256
+            lam       = signed * _LAMBDA_STEP + 1.0    # current lambda
+            new_lam   = lam * 2.0                       # rescaled for ×0.5 scaler
+            new_sig   = round((new_lam - 1.0) / _LAMBDA_STEP)
+            new_fuel.append(new_sig & 0xFF)
+    else:
+        # scaler 50 → 100 : halve the encoded lambda
+        new_scaler = INJ_SCALER_STOCK
+        new_fuel   = []
+        for raw in fuel:
+            signed    = raw if raw < 128 else raw - 256
+            lam       = signed * _LAMBDA_STEP + 1.0    # current encoded lambda
+            # At scaler=50, delivered = lam × 0.5
+            # To encode same delivery at scaler=100: new_lam = lam × 0.5
+            new_lam   = lam * 0.5
+            new_sig   = round((new_lam - 1.0) / _LAMBDA_STEP)
+            new_fuel.append(new_sig & 0xFF)
+
+    rom[INJ_SCALER_ADDR] = new_scaler
+    for i, val in enumerate(new_fuel):
+        rom[FUEL_MAP_ADDR + i] = val
+
+    return bytes(rom)

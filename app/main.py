@@ -1193,6 +1193,22 @@ class OverviewTab(QWidget):
             grid.addLayout(row("MAF profile",  maf_label,  maf_colour))
             grid.addLayout(row("CO pot state", cop_state,  cop_colour))
 
+        # Injection scaler trick — AAH / MMS200 only
+        vk = variant.version_key if hasattr(variant, 'version_key') else ''
+        inj_state = hr.detect_injection_scaler_trick(rom_snapshot, variant_key=vk)
+        if inj_state != 'not_applicable':
+            inj_colour = {
+                'stock':   '#aaa',
+                'halved':  '#2dff6e',
+                'unknown': '#ffaa00',
+            }.get(inj_state, '#555')
+            inj_label = {
+                'stock':   'stock (scaler=100)',
+                'halved':  'halved (scaler=50, high-res mode)',
+                'unknown': 'unknown',
+            }.get(inj_state, inj_state)
+            grid.addLayout(row("Inj scaler trick", inj_label, inj_colour))
+
         return w
 
     def update_rom_card(self, variant, rom_snapshot: bytes):
@@ -1355,6 +1371,50 @@ class HardwareTab(QWidget):
 
         layout.addWidget(self._divider())
 
+        # ── INJECTION SCALER TRICK ────────────────────────────────────────────
+        is_aah = self._variant and self._variant.version_key in ('AAH', 'MMS200')
+        if is_aah:
+            vk = self._variant.version_key
+            inj_state = hr.detect_injection_scaler_trick(self._rom, variant_key=vk)
+            inj_labels = {
+                'stock':   'stock  (scaler=100, standard 8-bit resolution)',
+                'halved':  'halved  (scaler=50, high-resolution mode)',
+                'unknown': 'unknown',
+            }
+            inj_colours = {
+                'stock':   '#aaa',
+                'halved':  '#2dff6e',
+                'unknown': '#ffaa00',
+            }
+            layout.addWidget(self._section_header(
+                "INJECTION SCALER TRICK",
+                "Halving the injection scaler (100→50) and mathematically "
+                "rescaling the fuel map doubles the effective resolution of "
+                "each map cell — each step is half the fuelling change. "
+                "Used by 034Motorsport on their Stage 1 AAH tune. "
+                "Note: apply rescales the existing map; it does not apply "
+                "a Stage 1 tune."))
+
+            inj_row = QHBoxLayout()
+            inj_row.setSpacing(12)
+            self.lbl_inj = QLabel(f"Current state:  {inj_labels.get(inj_state, inj_state)}")
+            self.lbl_inj.setStyleSheet(
+                f"color:{inj_colours.get(inj_state,'#aaa')}; font-size:12px;")
+            self.btn_inj = QPushButton("Change Resolution…")
+            self.btn_inj.setFixedWidth(180)
+            self.btn_inj.setStyleSheet(
+                "QPushButton { background:#1a2a1a; color:#fff; border:none; "
+                "border-radius:3px; padding:5px 12px; font-size:12px; }"
+                "QPushButton:hover { background:#253525; }")
+            self.btn_inj.clicked.connect(self._open_inj_trick)
+            inj_row.addWidget(self.lbl_inj, 1)
+            inj_row.addWidget(self.btn_inj)
+            layout.addLayout(inj_row)
+            layout.addWidget(self._divider())
+        else:
+            self.lbl_inj = None
+            self.btn_inj = None
+
         # ── INJECTOR / FPR CALCULATOR ─────────────────────────────────────────
         layout.addWidget(self._section_header(
             "INJECTOR / FPR CALCULATOR",
@@ -1403,6 +1463,31 @@ class HardwareTab(QWidget):
         if dlg.exec_() == QDialog.Accepted:
             self.patch_requested.emit("copot", dlg)
 
+    def _open_inj_trick(self):
+        vk    = self._variant.version_key if self._variant else ''
+        state = hr.detect_injection_scaler_trick(self._rom, variant_key=vk)
+        halve = state != 'halved'   # offer the opposite of current state
+        action = "halve (100→50, high-res)" if halve else "restore (50→100, standard)"
+        msg = (
+            f"Current state: {state}\n\n"
+            f"Action: {action}\n\n"
+            "This rescales the fuel map cells mathematically to maintain\n"
+            "equivalent fuelling at the new scaler value.\n\n"
+            "NOTE: This is not a Stage 1 tune — it only changes resolution.\n"
+            "After applying, retune the fuel map for your target AFR."
+        )
+        from PyQt5.QtWidgets import QMessageBox
+        reply = QMessageBox.question(
+            self, "Injection Scaler Resolution",
+            msg,
+            QMessageBox.Ok | QMessageBox.Cancel)
+        if reply == QMessageBox.Ok:
+            try:
+                patched = hr.apply_injection_scaler_trick(self._rom, halve=halve)
+                self.patch_requested.emit("inj_trick", (patched, halve))
+            except Exception as e:
+                QMessageBox.critical(self, "Error", str(e))
+
     def update_rom(self, rom_data: bytes):
         """Refresh patch state labels after ROM is modified."""
         self._rom = rom_data
@@ -1415,6 +1500,18 @@ class HardwareTab(QWidget):
             self.lbl_maf.setStyleSheet(f"color:{maf_colour}; font-size:12px;")
             self.lbl_cop.setText(f"Current state:  {cop_state}")
             self.lbl_cop.setStyleSheet(f"color:{cop_colour}; font-size:12px;")
+        if self.lbl_inj is not None and self._variant:
+            vk = self._variant.version_key
+            inj_state = hr.detect_injection_scaler_trick(rom_data, variant_key=vk)
+            inj_labels = {
+                'stock':   'stock  (scaler=100, standard resolution)',
+                'halved':  'halved  (scaler=50, high-resolution mode)',
+                'unknown': 'unknown',
+            }
+            inj_colours = {'stock': '#aaa', 'halved': '#2dff6e', 'unknown': '#ffaa00'}
+            self.lbl_inj.setText(f"Current state:  {inj_labels.get(inj_state, inj_state)}")
+            self.lbl_inj.setStyleSheet(
+                f"color:{inj_colours.get(inj_state,'#aaa')}; font-size:12px;")
 
 
 class CompareTab(QWidget):
@@ -1745,34 +1842,35 @@ _MAP_TIPS: dict[str, dict] = {
     },
     "Injection Scaler": {
         "what":  "A global multiplier on all injector pulse widths. "
-                 "Intended for injector swaps: if you fit larger injectors, "
-                 "lower this value so the ECU delivers the same fuel quantity "
-                 "per map unit as before. Stock 7A/AAH = 100 (stock injectors). "
-                 "Formula: new_scaler = 100 × (stock_cc / new_injector_cc).",
+                 "Stock AAH/266B = 100 (1.0×). Lowering this reduces pulse "
+                 "width for any given fuel map cell, so the map must be "
+                 "rescaled upward to maintain the same fuelling. "
+                 "Formula for injector swap: new_scaler = 100 × (stock_cc / new_cc).\n\n"
+                 "Resolution trick: setting scaler=50 doubles the effective "
+                 "resolution of the 8-bit fuel map — each cell step delivers "
+                 "half the fuelling change it would at scaler=100. Use the "
+                 "Hardware tab → Injection Scaler Resolution to apply this "
+                 "mathematically (existing map is rescaled automatically).",
         "tips": [
-            "Stock 7A (266B) and AAH injectors are ~205 cc/min. "
-            "Example: fitting 410 cc/min injectors → set scaler to 50.",
-            "266D (893 906 266 D) does not have an Injection Scaler byte — "
-            "the injector pulse is fixed in the ECU firmware on that variant. "
-            "Use the fuel map cells to adjust fuelling on a 266D.",
-            "The MMS Stage 1 AAH tune uses scaler=50 with the fuel map values "
-            "approximately doubled — this is a resolution trick, not a sign "
-            "of bigger injectors. Halving the scaler and doubling the map gives "
-            "finer 8-bit control over enrichment. Net WOT fuelling is richer "
-            "(lambda ~0.69–0.87 vs stock ~1.0), but the scaler change alone "
-            "tells you nothing about injector size.",
-            "Do not change this value without also rescaling the entire fuel "
-            "map. The two must always be changed together.",
-            "Do not use this as a coarse richness trim — edit the fuel map "
-            "cells directly instead.",
-            "After any injector swap: new_scaler × new_cc ≈ 100 × 205. "
-            "Start lean and richen the map; never start rich and lean down.",
+            "Stock AAH injectors ~305 cc/min @ 3bar (Hitachi). "
+            "Example: fitting 610 cc/min injectors → set scaler to 50.",
+            "266D (893 906 266 D) does not have a tunable Injection Scaler — "
+            "the injector pulse is fixed in firmware. Tune via fuel map only.",
+            "Resolution trick (scaler=50): each map cell now has 2× finer "
+            "control over fuelling. Useful when the 8-bit fuel map doesn't "
+            "have enough granularity for a precise idle or cruise tune. "
+            "The Hardware tab → Injection Scaler Resolution applies this "
+            "safely — it rescales every fuel cell so net fuelling is unchanged.",
+            "034Motorsport's Stage 1 AAH tune uses scaler=50 AND remapped "
+            "fuel values (mean ~219 vs stock ~125). The scaler change alone "
+            "does not produce a Stage 1 tune — 034 rewrote the fuel map too.",
+            "Never change this value without rescaling the fuel map. "
+            "The two must always move together.",
         ],
-        "caution": "Changing the scaler without rescaling the fuel map will "
-                   "cause severe over- or under-fuelling across the entire "
-                   "rev range. If in doubt, leave it at stock (100) and tune "
-                   "using the fuel map only.  "
-                   "Note: 266D does not expose this byte — tune via fuel map.",
+        "caution": "Changing the scaler without rescaling the fuel map causes "
+                   "severe over- or under-fuelling across the entire rev range. "
+                   "Use the Hardware tab to apply the resolution trick safely — "
+                   "it rescales both scaler and map in one operation.",
     },
     "MAF Linearization": {
         "what":  "266B only. Lookup table that converts raw MAF sensor counts "
@@ -2446,6 +2544,16 @@ class MainWindow(QMainWindow):
             self._apply_maf_patch_from_dialog(dlg)
         elif patch_type == "copot":
             self._apply_copot_patch_from_dialog(dlg)
+        elif patch_type == "inj_trick":
+            patched, halve = dlg  # dlg is (patched_bytes, halve_bool) for this type
+            self._rom_snapshot = patched
+            self._load_rom(self.current_path)
+            action = "halved to 50 (high-resolution mode)" if halve else "restored to 100 (standard)"
+            QMessageBox.information(
+                self, "Injection Scaler Applied",
+                f"Injection scaler {action}.\n\n"
+                "Fuel map cells have been mathematically rescaled to\n"
+                "maintain equivalent fuelling at the new scaler value.")
 
     def _maybe_refresh_hex(self, index: int):
         """Refresh the hex tab when the user switches to it."""
