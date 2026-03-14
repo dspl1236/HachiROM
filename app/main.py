@@ -1061,45 +1061,159 @@ class InjectorCalcWidget(QWidget):
 
 class OverviewTab(QWidget):
     """
-    First tab — ROM identity card only.
-    Shows variant, patches, checksum, detected states.
-    Scalar editors (RPM limit, injection scaler, CL) have moved to Hardware tab.
+    First tab — ROM identity card + confirmed scalar address reference.
+    Identity card: variant, patches, checksum, detected states.
+    Scalars table: all confirmed addresses with live values from loaded ROM.
     """
 
-    FIELD_NAMES: list = []   # no editable fields on Overview any more
+    FIELD_NAMES: list = []
 
     def __init__(self, variant, rom_snapshot: bytes, parent=None):
         super().__init__(parent)
         self._fields: list[OverviewField] = []
+        self._variant      = variant
+        self._rom_snapshot = rom_snapshot
+        self._scalar_rows: list[tuple] = []  # (addr_lbl, raw_lbl, dec_lbl)
         self._build_ui(variant, rom_snapshot)
 
     def _build_ui(self, variant, rom_snapshot: bytes):
         root = QVBoxLayout(self)
-        root.setContentsMargins(20, 20, 20, 20)
-        root.setSpacing(12)
+        root.setContentsMargins(0, 0, 0, 0)
+        root.setSpacing(0)
 
-        # ROM identity card — full width
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setStyleSheet("QScrollArea { border:none; background:transparent; }")
+        inner = QWidget()
+        layout = QVBoxLayout(inner)
+        layout.setContentsMargins(20, 20, 20, 20)
+        layout.setSpacing(16)
+        scroll.setWidget(inner)
+        root.addWidget(scroll)
+
+        # ── ROM IDENTITY ──────────────────────────────────────────────────────
         hdr = QLabel("ROM IDENTITY")
         hdr.setStyleSheet(
             "color:#2dff6e; font-size:10px; font-weight:bold; letter-spacing:2px;")
-        root.addWidget(hdr)
+        layout.addWidget(hdr)
 
-        sep = QFrame()
-        sep.setFrameShape(QFrame.HLine)
-        sep.setStyleSheet("color:#2a2a2a;")
-        root.addWidget(sep)
+        sep1 = QFrame(); sep1.setFrameShape(QFrame.HLine)
+        sep1.setStyleSheet("color:#2a2a2a;")
+        layout.addWidget(sep1)
 
         self._rom_card = self._build_rom_card(variant, rom_snapshot)
-        root.addWidget(self._rom_card)
+        layout.addWidget(self._rom_card)
 
         hint = QLabel(
             "Edit scalars (RPM limit, injection scaler, CL) and hardware "
             "patches (MAF axis, CO pot) on the ⚙ Hardware tab →")
         hint.setWordWrap(True)
-        hint.setStyleSheet("color:#444; font-size:11px; padding:8px 0 0 0;")
-        root.addWidget(hint)
+        hint.setStyleSheet("color:#444; font-size:11px;")
+        layout.addWidget(hint)
 
-        root.addStretch()
+        # ── CONFIRMED SCALAR ADDRESSES ────────────────────────────────────────
+        hdr2 = QLabel("CONFIRMED SCALAR ADDRESSES")
+        hdr2.setStyleSheet(
+            "color:#2dff6e; font-size:10px; font-weight:bold; letter-spacing:2px; "
+            "padding-top:8px;")
+        layout.addWidget(hdr2)
+
+        sep2 = QFrame(); sep2.setFrameShape(QFrame.HLine)
+        sep2.setStyleSheet("color:#2a2a2a;")
+        layout.addWidget(sep2)
+
+        sub = QLabel(
+            "All addresses verified from physical 266D EPROM read.  "
+            "Values update live as you edit.")
+        sub.setWordWrap(True)
+        sub.setStyleSheet("color:#555; font-size:11px;")
+        layout.addWidget(sub)
+
+        # Column header
+        hrow = QHBoxLayout()
+        hrow.setSpacing(12)
+        def _ch(text, w=None):
+            l = QLabel(text)
+            l.setStyleSheet(
+                "color:#666; font-size:10px; font-weight:bold; "
+                "border-bottom:1px solid #2a2a2a; padding-bottom:2px;")
+            if w: l.setFixedWidth(w)
+            return l
+        hrow.addWidget(_ch("Address", 70))
+        hrow.addWidget(_ch("Value",   80))
+        hrow.addWidget(_ch("Decoded", 90))
+        hrow.addWidget(_ch("Name / Description"))
+        layout.addLayout(hrow)
+
+        # Scalar rows — build once, update values via update_scalars()
+        self._scalars_container = QVBoxLayout()
+        self._scalars_container.setSpacing(2)
+        layout.addLayout(self._scalars_container)
+        self._build_scalar_rows(rom_snapshot)
+
+        layout.addStretch()
+
+    def _build_scalar_rows(self, rom_data: bytes):
+        """Build or rebuild all scalar rows from ScalarsTab.SCALARS."""
+        # Clear existing
+        while self._scalars_container.count():
+            item = self._scalars_container.takeAt(0)
+            if item.widget():
+                item.widget().deleteLater()
+        self._scalar_rows.clear()
+
+        for name, addr, unit, fn, desc, _ in ScalarsTab.SCALARS:
+            row_w = QWidget()
+            row_w.setStyleSheet(
+                "QWidget { background:#1e1e1e; border-radius:3px; }"
+                "QWidget:hover { background:#252525; }")
+            row = QHBoxLayout(row_w)
+            row.setContentsMargins(6, 3, 6, 3)
+            row.setSpacing(12)
+
+            lbl_addr = QLabel(f"0x{addr:04X}")
+            lbl_addr.setFixedWidth(70)
+            lbl_addr.setStyleSheet(
+                "color:#555; font-family:Consolas; font-size:11px;")
+
+            if rom_data and addr < len(rom_data):
+                raw     = rom_data[addr]
+                raw_txt = f"0x{raw:02X} ({raw})"
+                dec_txt = f"{fn(raw):.0f} {unit}" if unit != "raw" else str(fn(raw))
+            else:
+                raw_txt = dec_txt = "—"
+
+            lbl_raw = QLabel(raw_txt)
+            lbl_raw.setFixedWidth(80)
+            lbl_raw.setStyleSheet(
+                "color:#e0e0e0; font-family:Consolas; font-size:11px;")
+
+            lbl_dec = QLabel(dec_txt)
+            lbl_dec.setFixedWidth(90)
+            lbl_dec.setStyleSheet("color:#888; font-size:11px;")
+
+            lbl_desc = QLabel(f"<b style='color:#bbb'>{name}</b>"
+                              f"<span style='color:#555'> — {desc}</span>")
+            lbl_desc.setWordWrap(True)
+            lbl_desc.setTextFormat(Qt.RichText)
+            lbl_desc.setStyleSheet("font-size:10px;")
+
+            row.addWidget(lbl_addr)
+            row.addWidget(lbl_raw)
+            row.addWidget(lbl_dec)
+            row.addWidget(lbl_desc, 1)
+
+            self._scalars_container.addWidget(row_w)
+            self._scalar_rows.append((lbl_addr, lbl_raw, lbl_dec, addr, unit, fn))
+
+    def update_scalars(self, rom_data: bytes):
+        """Refresh scalar values without rebuilding the whole tab."""
+        for lbl_addr, lbl_raw, lbl_dec, addr, unit, fn in self._scalar_rows:
+            if addr < len(rom_data):
+                raw     = rom_data[addr]
+                lbl_raw.setText(f"0x{raw:02X} ({raw})")
+                lbl_dec.setText(
+                    f"{fn(raw):.0f} {unit}" if unit != "raw" else str(fn(raw)))
 
     def _build_rom_card(self, variant, rom_snapshot: bytes) -> QWidget:
         """Compact ROM identity card — variant, patches, checksum."""
@@ -2545,13 +2659,16 @@ class MainWindow(QMainWindow):
     # -- Tab change -> update map info panel ------------------------------------
 
     def _on_rom_changed(self):
-        """Called whenever any map tab or overview field commits an edit."""
+        """Called whenever any map tab or scalar field commits an edit."""
         if self._hex_tab:
             self._hex_tab.mark_dirty()
+        built = self._build_rom()
+        if self._overview_tab:
+            self._overview_tab.update_scalars(bytes(built))
         if self._scalars_tab:
-            self._scalars_tab.update_rom(self._build_rom())
+            self._scalars_tab.update_rom(bytes(built))
         if self._hardware_tab:
-            self._hardware_tab.update_rom(self._build_rom())
+            self._hardware_tab.update_rom(bytes(built))
 
     def _on_hardware_patch(self, patch_type: str, dlg):
         """Route patch dialogs from HardwareTab back through existing handlers."""
@@ -2612,11 +2729,8 @@ class MainWindow(QMainWindow):
                 "CO pot patch · Injection scaler resolution · Injector/FPR calculator.")
         elif "Overview" in name:
             self._update_tip_strip(
-                "Overview  ·  ROM identity, variant, checksum, and detected patch states.")
-        elif "Scalars" in name:
-            self._update_tip_strip(
-                "Scalars reference  ·  All confirmed ROM addresses from physical EPROM read. "
-                "Values update live as you edit.")
+                "Overview  ·  ROM identity, variant, checksum, patch states, "
+                "and confirmed scalar address reference.")
         else:
             self.map_panel.update_map("HachiROM", info=_WELCOME_PANEL)
             self._update_tip_strip(
@@ -2675,10 +2789,10 @@ class MainWindow(QMainWindow):
         self._overview_tab  = None
         self._hardware_tab  = None
         self._hex_tab       = None
-        self._scalars_tab   = None
+        self._scalars_tab   = None   # data now shown on Overview tab
 
         if result.variant:
-            # Overview tab — ROM identity card (position 0)
+            # Overview tab — ROM identity card + scalar reference (position 0)
             self._overview_tab = OverviewTab(result.variant, self._rom_snapshot)
             for field in self._overview_tab._fields:
                 field.changed.connect(self._on_rom_changed)
@@ -2706,11 +2820,6 @@ class MainWindow(QMainWindow):
 
         self.compare_tab = CompareTab()
         self._compare_tab_idx = self.tabs.addTab(self.compare_tab, "⊕ Compare")
-
-        # Scalars reference tab
-        if result.variant:
-            self._scalars_tab = ScalarsTab(self._rom_snapshot)
-            self.tabs.addTab(self._scalars_tab, "⚙ Scalars")
 
         # Hex tab — always last
         self._hex_tab = HexViewTab(

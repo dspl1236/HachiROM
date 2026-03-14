@@ -45,7 +45,7 @@ from .roms   import (ROMVariant, MapDef, ALL_VARIANTS,
                      MAF_AXIS_1_8T_60, MAF_AXIS_1_8T_VR6,
                      MAF_AXIS_ADDR_FUEL, MAF_AXIS_ADDR_TIMING)
 
-__version__ = "0.7.1"
+__version__ = "0.7.2"
 
 __all__ = [
     "detect", "load_bin", "save_bin", "load_bin_normalised", "DetectionResult",
