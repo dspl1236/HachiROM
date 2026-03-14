@@ -641,6 +641,11 @@ class MapTab(QWidget):
         hdr.addWidget(hint)
         layout.addLayout(hdr)
 
+        # Timing-specific legend bar
+        if self._is_timing:
+            legend = self._build_timing_legend()
+            layout.addWidget(legend)
+
         rows, cols = self.map_def.rows, self.map_def.cols
         self.table = QTableWidget(rows, cols)
         self.table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
@@ -664,7 +669,53 @@ class MapTab(QWidget):
         # no blockSignals needed, works correctly on every tab.
         self.table.itemDelegate().commitData.connect(self._on_commit)
 
+    @staticmethod
+    def _build_timing_legend() -> QWidget:
+        """Colour-coded degree scale for timing maps: −10° … +40° BTDC."""
+        from PyQt5.QtWidgets import QSizePolicy
+        w = QWidget()
+        w.setFixedHeight(22)
+        w.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+
+        class _LegendPainter(QWidget):
+            def paintEvent(self, _evt):
+                from PyQt5.QtGui import QPainter, QLinearGradient
+                p = QPainter(self)
+                w, h = self.width(), self.height()
+                stops = [(-10, 0), (0, 64), (15, 128), (25, 180), (40, 255)]
+                grad = QLinearGradient(0, 0, w, 0)
+                for deg, raw in stops:
+                    t = (deg + 10) / 50.0
+                    c = timing_colour(raw)
+                    grad.setColorAt(t, c)
+                p.fillRect(0, 0, w, h, grad)
+                p.setPen(QColor("#111"))
+                p.setFont(QFont("Consolas", 8))
+                for deg in [-10, -5, 0, 5, 10, 15, 20, 25, 30, 35, 40]:
+                    t = (deg + 10) / 50.0
+                    x = int(t * w)
+                    p.drawText(x - 8, 0, 20, h, Qt.AlignCenter, str(deg))
+                p.end()
+
+        bar = _LegendPainter(w)
+        lbl_l = QLabel("° BTDC  retard")
+        lbl_r = QLabel("advance")
+        lbl_l.setStyleSheet("color:#666; font-size:9px; padding:0 4px;")
+        lbl_r.setStyleSheet("color:#666; font-size:9px; padding:0 4px;")
+
+        row = QHBoxLayout(w)
+        row.setContentsMargins(0, 0, 0, 0)
+        row.setSpacing(4)
+        row.addWidget(lbl_l)
+        row.addWidget(bar, 1)
+        row.addWidget(lbl_r)
+        return w
+
+
     def _decode(self, raw: int) -> str:
+        if self._is_timing:
+            signed = raw if raw < 128 else raw - 256
+            return f"{signed:+d}°"
         if self.map_def.decode:
             v = self.map_def.decode(raw)
             return f"{v:.3f}" if isinstance(v, float) else str(v)
@@ -672,15 +723,18 @@ class MapTab(QWidget):
 
     def _encode(self, text: str):
         try:
-            v = float(text)
+            # Accept "+15°", "-5°", "15°", "15" etc.
+            clean = text.strip().rstrip("°").strip()
+            v = float(clean)
             if self.map_def.encode:
-                # Always pass a numeric type the encode function can handle.
-                # timing_encode uses & 0xFF so needs int; lambda encodes need float.
                 raw = self.map_def.encode(v)
                 return max(0, min(255, int(round(raw)) & 0xFF))
+            if self._is_timing:
+                iv = int(round(v))
+                return iv & 0xFF  # two's complement
             iv = int(v)
             if iv < 0:
-                iv = iv & 0xFF   # two's complement for signed maps (e.g. timing trim)
+                iv = iv & 0xFF
             return max(0, min(255, iv))
         except (ValueError, TypeError):
             return None
@@ -875,6 +929,136 @@ class OverviewField(QWidget):
         return self._map_tab.changed_count()
 
 
+class InjectorCalcWidget(QWidget):
+    """
+    Live injector / FPR calculator shown below the Injection Scaler field.
+    Inputs:  rated flow (cc/min @ 3bar), operating pressure (psi), displacement (cc)
+    Outputs: actual flow, vs-stock delta, stroker headroom, recommended FPR
+    """
+    STOCK_CC_3BAR = 305.0   # stock Hitachi 7A @ 3bar
+    STOCK_PBAR    = 4.0     # Audi runs 7A at 4bar
+    PSI_PER_BAR   = 14.5038
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._build_ui()
+
+    def _build_ui(self):
+        import math
+        root = QVBoxLayout(self)
+        root.setContentsMargins(0, 12, 0, 0)
+        root.setSpacing(6)
+
+        hdr = QLabel("INJECTOR / FPR CALCULATOR")
+        hdr.setStyleSheet(
+            "color:#2dff6e; font-size:10px; font-weight:bold; letter-spacing:2px;")
+        root.addWidget(hdr)
+        sep = QFrame()
+        sep.setFrameShape(QFrame.HLine)
+        sep.setStyleSheet("color:#2a2a2a;")
+        root.addWidget(sep)
+
+        sub = QLabel(
+            "Enter your injector rated flow (@ 3bar), fuel pressure, and displacement "
+            "to see actual delivery vs stock and whether your injectors can feed the engine.")
+        sub.setWordWrap(True)
+        sub.setStyleSheet("color:#555; font-size:11px;")
+        root.addWidget(sub)
+
+        # ── Input row ──────────────────────────────────────────────────────
+        grid = QHBoxLayout()
+        grid.setSpacing(16)
+
+        def _inp(label, default, unit, tip):
+            col = QVBoxLayout()
+            col.setSpacing(2)
+            lbl = QLabel(label)
+            lbl.setStyleSheet("color:#888; font-size:10px;")
+            ed = QLineEdit(default)
+            ed.setFixedWidth(80)
+            ed.setToolTip(tip)
+            ed.setStyleSheet(
+                "background:#2a2a2a; color:#e8e8e8; border:1px solid #444; "
+                "border-radius:3px; padding:3px 5px; font-size:12px;")
+            u = QLabel(unit)
+            u.setStyleSheet("color:#555; font-size:10px;")
+            col.addWidget(lbl)
+            col.addWidget(ed)
+            col.addWidget(u)
+            return col, ed
+
+        c1, self.ed_flow = _inp("Injector flow",  "305",  "cc/min @ 3bar",
+                                 "Measured or rated injector flow at 3 bar reference")
+        c2, self.ed_psi  = _inp("FPR pressure",   "58.0", "psi",
+                                 "Your actual fuel rail pressure in psi")
+        c3, self.ed_disp = _inp("Displacement",   "2309", "cc",
+                                 "Engine displacement in cc (stock 7A = 2309)")
+        grid.addLayout(c1)
+        grid.addLayout(c2)
+        grid.addLayout(c3)
+        grid.addStretch()
+        root.addLayout(grid)
+
+        # ── Results ────────────────────────────────────────────────────────
+        self.lbl_results = QLabel("")
+        self.lbl_results.setWordWrap(True)
+        self.lbl_results.setTextFormat(Qt.RichText)
+        self.lbl_results.setStyleSheet(
+            "font-size:11px; color:#ccc; background:#1a1a1a; "
+            "border-radius:4px; padding:6px 8px; margin-top:4px;")
+        root.addWidget(self.lbl_results)
+
+        for ed in (self.ed_flow, self.ed_psi, self.ed_disp):
+            ed.textChanged.connect(self._calculate)
+
+        self._calculate()
+
+    def _calculate(self):
+        import math
+        try:
+            flow_3bar = float(self.ed_flow.text())
+            psi       = float(self.ed_psi.text())
+            disp      = float(self.ed_disp.text())
+            assert flow_3bar > 0 and psi > 0 and disp > 0
+        except Exception:
+            self.lbl_results.setText("<i style='color:#555'>Enter valid numbers above.</i>")
+            return
+
+        bar          = psi / self.PSI_PER_BAR
+        actual       = flow_3bar * math.sqrt(bar / 3.0)
+        stock_actual = self.STOCK_CC_3BAR * math.sqrt(self.STOCK_PBAR / 3.0)
+        delta_pct    = (actual / stock_actual - 1.0) * 100.0
+        needed       = stock_actual * (disp / 2309.0)
+        headroom_pct = (actual / needed - 1.0) * 100.0
+        p_stock      = 3.0 * (stock_actual / flow_3bar) ** 2
+        p_disp       = 3.0 * (needed       / flow_3bar) ** 2
+
+        def _col(pct, positive_good=True):
+            good = pct >= -2
+            if positive_good:
+                c = "#2dff6e" if pct > 2 else "#ff6666" if pct < -2 else "#ffaa00"
+            else:
+                c = "#ff6666" if pct > 2 else "#2dff6e" if pct < -2 else "#ffaa00"
+            return f"<span style='color:{c}'>{pct:+.1f}%</span>"
+
+        lines = [
+            f"<b>Actual flow @ {psi:.1f} psi ({bar:.2f} bar):</b>  {actual:.1f} cc/min",
+            f"<b>Stock Hitachi @ 4 bar:</b>  {stock_actual:.1f} cc/min  "
+            f"({_col(delta_pct)} vs stock)",
+            f"<b>Engine {disp:.0f}cc needs:</b>  {needed:.1f} cc/min  "
+            f"({'<span style=\"color:#ff6666\">SHORT</span>' if headroom_pct < -2 else '<span style=\"color:#2dff6e\">OK</span>'}  "
+            f"{_col(headroom_pct)})",
+            f"<b>FPR for stock flow:</b>  {p_stock:.2f} bar  ({p_stock * self.PSI_PER_BAR:.1f} psi)",
+            f"<b>FPR for {disp:.0f}cc:</b>  {p_disp:.2f} bar  ({p_disp * self.PSI_PER_BAR:.1f} psi)",
+        ]
+        self.lbl_results.setText("<br>".join(lines))
+
+    def prefill(self, flow_cc=None, psi=None, disp_cc=None):
+        if flow_cc  is not None: self.ed_flow.setText(str(flow_cc))
+        if psi      is not None: self.ed_psi.setText(str(psi))
+        if disp_cc  is not None: self.ed_disp.setText(str(disp_cc))
+
+
 class OverviewTab(QWidget):
     """First tab — surfaces RPM Limit, Injection Scaler, CL Disable RPM
     as simple labelled input fields. Mirrors the DigiTool overview UX."""
@@ -942,6 +1126,10 @@ class OverviewTab(QWidget):
             outer.addWidget(self._section_header("ECU PARAMETERS", subtitle))
 
         outer.addStretch()
+
+        # ── Injector / FPR calculator ────────────────────────────────────────
+        self._inj_calc = InjectorCalcWidget()
+        outer.addWidget(self._inj_calc)
 
         # ── Workflow hint ────────────────────────────────────────────────────
         hint = QLabel(
@@ -1616,6 +1804,179 @@ class ROMInfoWidget(QWidget):
 # Hex viewer — shown for unknown/unrecognised ROMs
 # ---------------------------------------------------------------------------
 
+class ScalarsTab(QWidget):
+    """
+    Reference tab — all confirmed scalar addresses from physical ROM analysis.
+    Shows current value from the loaded ROM alongside description and formula.
+    """
+
+    # (name, address, unit, formula_fn, description, confirmed)
+    SCALARS = [
+        ("RPM Limit",          0x07D2, "RPM",    lambda r: r * 25,
+         "Rev limiter. ECU cuts injectors above this RPM. raw × 25 = RPM.",
+         True),
+        ("CL RPM Limit",       0x07E1, "RPM",    lambda r: r * 25,
+         "Closed-loop O2 correction disabled above this RPM. raw × 25 = RPM.",
+         True),
+        ("Injection Scaler",   0x077E, "raw",    lambda r: r,
+         "Global injector pulse multiplier. Stock = 100. "
+         "new = 100 × (stock_cc / new_cc). 266D only.",
+         True),
+        ("CO Pot Low Thresh",  0x0762, "raw",    lambda r: r,
+         "CO pot ADC fault threshold — low side. "
+         "Patched to 0x00 (0V) to disable CO pot fault. Stock = 0x0A (10).",
+         True),
+        ("CO Pot High Thresh", 0x0763, "raw",    lambda r: r,
+         "CO pot ADC fault threshold — high side. "
+         "Patched to 0xFF (5V) to disable CO pot fault. Stock = 0xEE (238).",
+         True),
+        ("CO Pot Neutral",     0x0777, "raw",    lambda r: r,
+         "CO pot neutral (centre) target. 128 = mid-scale = no trim. "
+         "Unchanged by CO pot patch — harmless with gain = 0.",
+         True),
+        ("CO Pot Window",      0x0778, "raw",    lambda r: r,
+         "CO pot authority window ±N ADC counts around neutral. Stock = 50.",
+         True),
+        ("CO Pot Gain",        0x0779, "raw",    lambda r: r,
+         "CO pot trim gain per ADC count. "
+         "Patched to 0x00 to zero the trim effect. Stock = 0x04 (4).",
+         True),
+        ("MAF Axis [0]",       0x05D0, "raw",    lambda r: r,
+         "First cell of MAF voltage→load axis (fuel map). "
+         "Full 16-byte axis at 0x05D0–0x05DF. Stock 7A: [5,10,20,30,…].",
+         True),
+        ("MAF Axis [0] (Timing)", 0x05E0, "raw", lambda r: r,
+         "First cell of MAF axis copy used by timing map. "
+         "Identical to fuel axis on stock ROM. 0x05E0–0x05EF.",
+         True),
+        ("CO Pot Fault Code",  0x0AC9, "raw",    lambda r: r,
+         "Fault table entry for CO pot out-of-range (VAG fault 00521). "
+         "Bytes 0x0AC9–0x0ACB: 02 09 1E. Not modified by CO pot patch — "
+         "thresholds 0x00/0xFF prevent it from firing.",
+         True),
+    ]
+
+    def __init__(self, rom_data: bytes = b"", parent=None):
+        super().__init__(parent)
+        self._rom = rom_data
+        self._rows: list[tuple] = []  # (addr_lbl, val_lbl, name_lbl)
+        self._build_ui()
+
+    def _build_ui(self):
+        root = QVBoxLayout(self)
+        root.setContentsMargins(12, 12, 12, 12)
+        root.setSpacing(8)
+
+        hdr = QLabel("CONFIRMED SCALAR ADDRESSES — 893 906 266D (MMS05C physical read)")
+        hdr.setStyleSheet(
+            "color:#2dff6e; font-size:10px; font-weight:bold; letter-spacing:1px;")
+        root.addWidget(hdr)
+
+        sub = QLabel(
+            "All addresses verified against a physical EPROM read of "
+            "893906266D_MMS05C_physical.bin (32KB, cs=False). "
+            "Values update when a ROM is loaded.")
+        sub.setWordWrap(True)
+        sub.setStyleSheet("color:#555; font-size:11px;")
+        root.addWidget(sub)
+
+        sep = QFrame()
+        sep.setFrameShape(QFrame.HLine)
+        sep.setStyleSheet("color:#2a2a2a;")
+        root.addWidget(sep)
+
+        # Table header
+        def _hdr(text, w=None):
+            l = QLabel(text)
+            l.setStyleSheet(
+                "color:#888; font-size:10px; font-weight:bold; "
+                "border-bottom:1px solid #333; padding-bottom:2px;")
+            if w: l.setFixedWidth(w)
+            return l
+
+        hrow = QHBoxLayout()
+        hrow.setSpacing(12)
+        hrow.addWidget(_hdr("Address", 70))
+        hrow.addWidget(_hdr("Current", 70))
+        hrow.addWidget(_hdr("Decoded", 80))
+        hrow.addWidget(_hdr("Name / Description", 500))
+        root.addLayout(hrow)
+
+        # Scroll area for rows
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setStyleSheet("QScrollArea { border:none; background:transparent; }")
+        inner = QWidget()
+        self._inner_layout = QVBoxLayout(inner)
+        self._inner_layout.setSpacing(2)
+        self._inner_layout.setContentsMargins(0, 0, 0, 0)
+        scroll.setWidget(inner)
+        root.addWidget(scroll)
+
+        self._populate_rows()
+
+    def _populate_rows(self):
+        # Clear old rows
+        while self._inner_layout.count():
+            item = self._inner_layout.takeAt(0)
+            if item.widget():
+                item.widget().deleteLater()
+        self._rows.clear()
+
+        for name, addr, unit, fn, desc, confirmed in self.SCALARS:
+            row_w = QWidget()
+            row_w.setStyleSheet(
+                "QWidget { background:#1e1e1e; border-radius:3px; }"
+                "QWidget:hover { background:#252525; }")
+            row = QHBoxLayout(row_w)
+            row.setContentsMargins(6, 4, 6, 4)
+            row.setSpacing(12)
+
+            # Address
+            lbl_addr = QLabel(f"0x{addr:04X}")
+            lbl_addr.setFixedWidth(70)
+            lbl_addr.setStyleSheet("color:#666; font-family:Consolas; font-size:11px;")
+            row.addWidget(lbl_addr)
+
+            # Raw value
+            if self._rom and addr < len(self._rom):
+                raw = self._rom[addr]
+                raw_txt = f"0x{raw:02X} ({raw})"
+                decoded = fn(raw)
+                dec_txt = f"{decoded:.0f} {unit}" if unit != "raw" else f"{decoded}"
+            else:
+                raw_txt = "—"
+                dec_txt = "—"
+
+            lbl_raw = QLabel(raw_txt)
+            lbl_raw.setFixedWidth(70)
+            lbl_raw.setStyleSheet(
+                "color:#e8e8e8; font-family:Consolas; font-size:11px;")
+            row.addWidget(lbl_raw)
+
+            lbl_dec = QLabel(dec_txt)
+            lbl_dec.setFixedWidth(80)
+            lbl_dec.setStyleSheet("color:#aaa; font-size:11px;")
+            row.addWidget(lbl_dec)
+
+            # Name + description
+            lbl_desc = QLabel(f"<b style='color:#ccc'>{name}</b> — {desc}")
+            lbl_desc.setWordWrap(True)
+            lbl_desc.setTextFormat(Qt.RichText)
+            lbl_desc.setStyleSheet("font-size:11px; color:#888;")
+            row.addWidget(lbl_desc, 1)
+
+            self._inner_layout.addWidget(row_w)
+            self._rows.append((lbl_addr, lbl_raw, lbl_dec))
+
+        self._inner_layout.addStretch()
+
+    def update_rom(self, rom_data: bytes):
+        """Refresh values when a new ROM is loaded."""
+        self._rom = rom_data
+        self._populate_rows()
+
+
 class HexViewTab(QWidget):
     """Live hex view of the assembled working ROM.
 
@@ -1732,6 +2093,7 @@ class MainWindow(QMainWindow):
         self._map_tabs:       list[MapTab] = []
         self._overview_tab:  OverviewTab | None = None
         self._hex_tab:       HexViewTab | None = None
+        self._scalars_tab:   ScalarsTab | None = None
         self._compare_tab_idx: int = -1
         self._build_menu()
         self._build_ui()
@@ -1878,9 +2240,12 @@ class MainWindow(QMainWindow):
 
     def _on_rom_changed(self):
         """Called whenever any map tab or overview field commits an edit.
-        Marks the hex tab dirty so it refreshes on next activation."""
+        Marks the hex tab dirty so it refreshes on next activation.
+        Also refreshes the scalars tab with the new assembled ROM."""
         if self._hex_tab:
             self._hex_tab.mark_dirty()
+        if self._scalars_tab:
+            self._scalars_tab.update_rom(self._build_rom())
 
     def _maybe_refresh_hex(self, index: int):
         """Refresh the hex tab when the user switches to it."""
@@ -1980,6 +2345,7 @@ class MainWindow(QMainWindow):
         self._map_tabs = []
         self._overview_tab = None
         self._hex_tab = None
+        self._scalars_tab = None
 
         if result.variant:
             # Overview tab — always first
@@ -2003,6 +2369,11 @@ class MainWindow(QMainWindow):
 
         self.compare_tab = CompareTab()
         self._compare_tab_idx = self.tabs.addTab(self.compare_tab, "⊕ Compare")
+
+        # Scalars reference tab — always present when variant identified
+        if result.variant:
+            self._scalars_tab = ScalarsTab(self._rom_snapshot)
+            self.tabs.addTab(self._scalars_tab, "⚙ Scalars")
 
         # Hex tab — always last, shows assembled working ROM (edits + checksum)
         self._hex_tab = HexViewTab(
