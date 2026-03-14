@@ -599,12 +599,56 @@ ROM_AAH = ROMVariant(
     reset_vector=bytes([0xEF, 0x18]),
 )
 
+# ---------------------------------------------------------------------------
+# MMS-200 — 8A0906266A
+# Audi 90 / A6 2.8 V6 (AAH/ACK), 1992–1995
+# ---------------------------------------------------------------------------
+#
+# Hardware:
+#   ECU hardware:  Hitachi MMS-200
+#   Part number:   8A0 906 266 A
+#   Connector:     2-plug (early style, same family as 266B)
+#   Engine:        AAH / ACK 2.8L V6 12v
+#   Vehicles:      Audi 90 (B4), Audi A6 (C4), possibly Audi 100 (C4)
+#   Years:         1992–1995
+#
+# Known:
+#   - MMS-200 hardware platform (distinct from MMS05C and MMS100)
+#   - 2-plug connector like the 266B, not the 4-plug 266D
+#   - Likely MAP-sensor based (same engine family as 4A0906266 AAH)
+#   - No ROM dump available yet — stub only for documentation purposes
+#   - Map layout, checksum scheme, and chip type unconfirmed
+#
+# TODO:
+#   - Obtain a physical ROM dump to confirm map addresses
+#   - Verify chip type (likely 27C256 or 27C512)
+#   - Confirm checksum algorithm matches AAH or differs
+#   - Add known_crc32s once stock dumps are available
+#
+_MAPS_MMS200: list = []   # unknown until dump obtained
+
+ROM_MMS200 = ROMVariant(
+    name="MMS-200 2.8 V6", version_key="MMS200", part_number="8A0906266A",
+    chip="27C512",   # unconfirmed — placeholder
+    size=32768,      # unconfirmed — placeholder
+    description="Audi 90/A6 C4 2.8 V6 12v (AAH/ACK) — MMS-200 platform. "
+                "STUB: no ROM dump available, map addresses unconfirmed.",
+    maps=_MAPS_MMS200,
+    checksum={},     # unknown
+    known_crc32s=[],
+    reset_vector=None,
+)
+
 
 # ---------------------------------------------------------------------------
 # Registry
 # ---------------------------------------------------------------------------
 
 ALL_VARIANTS: list[ROMVariant] = [ROM_266D, ROM_266B, ROM_AAH]
+# ROM_MMS200 intentionally excluded from ALL_VARIANTS until a dump is obtained
+# and map addresses are confirmed. Add it here once verified.
+# ALL_VARIANTS.append(ROM_MMS200)
+
 
 _CRC32_MAP: dict[int, ROMVariant] = {}
 for _v in ALL_VARIANTS:
