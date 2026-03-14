@@ -601,40 +601,107 @@ ROM_AAH = ROMVariant(
 
 # ---------------------------------------------------------------------------
 # MMS-200 — 8A0906266A
-# Audi 90 / A6 2.8 V6 (AAH/ACK), 1992–1995
+# Audi 90 (B4) / A6 (C4) / 100 (C4) 2.8 V6 (AAH/ACK), 1992–1995
 # ---------------------------------------------------------------------------
 #
 # Hardware:
 #   ECU hardware:  Hitachi MMS-200
 #   Part number:   8A0 906 266 A
-#   Connector:     2-plug (early style, same family as 266B)
+#   Connector:     2-plug (same physical style as 266B)
 #   Engine:        AAH / ACK 2.8L V6 12v
-#   Vehicles:      Audi 90 (B4), Audi A6 (C4), possibly Audi 100 (C4)
+#   Vehicles:      Audi 90 B4, Audi A6 C4, Audi 100 C4
 #   Years:         1992–1995
 #
-# Known:
-#   - MMS-200 hardware platform (distinct from MMS05C and MMS100)
-#   - 2-plug connector like the 266B, not the 4-plug 266D
-#   - Likely MAP-sensor based (same engine family as 4A0906266 AAH)
-#   - No ROM dump available yet — stub only for documentation purposes
-#   - Map layout, checksum scheme, and chip type unconfirmed
+# ROM layout (verified from V6AAHCoupeMMS200.bin + 8A0906266A-MMS200.xdf):
+#   Map addresses are IDENTICAL to the MMS100 (4A0906266) AAH variant.
+#   XDF author confirmed: "The MMS-200 definition file works on 4A0906266
+#   MMS-100 and 8A0906266A MMS-200" — same layout, different ECU hardware.
 #
-# TODO:
-#   - Obtain a physical ROM dump to confirm map addresses
-#   - Verify chip type (likely 27C256 or 27C512)
-#   - Confirm checksum algorithm matches AAH or differs
-#   - Add known_crc32s once stock dumps are available
+# Key differences from AAH (4A0906266):
+#   - NMAX at 0x077D — 16-bit LITTLE-ENDIAN, formula: RPM = raw_uint16 / 4
+#     Stock: 0x0064 0x64 LE = 25600 → 6400 RPM
+#     (AAH/266D use single-byte at 0x07D2, raw×25=RPM)
+#   - Checksum: unknown — XDF has no checksum constant. Correction skipped.
+#   - Reset vector: 0xFFFF (erased) — no reset vector detection.
 #
-_MAPS_MMS200: list = []   # unknown until dump obtained
+# Confirmed map addresses (XDF + physical ROM verification):
+#   KFKES  0x0000  16×16  Fuel/lambda correction (signed, -50..+15)
+#   KFZW   0x0100  16×16  Primary timing (deg BTDC)
+#   KFZW2  0x1000  16×16  Knock/safety timing (deg BTDC)
+#   MAP5   0x0C10   1×16  Idle ignition trim
+#   NMAX   0x077D  16-bit LE  Rev limiter (RPM = raw / 4)
+#
+# Load axis (from XDF LABEL values — kPa or % MAP):
+#   10,15,20,25,30,35,40,45,50,60,70,80,85,90,95,100
+# ---------------------------------------------------------------------------
+
+LOAD_AXIS_MMS200 = [10,15,20,25,30,35,40,45,50,60,70,80,85,90,95,100]
+
+_MAPS_MMS200 = [
+    MapDef("Primary Fueling",    0x0000, 16, 16,
+           "Fuel/lambda correction map (KFKES). Signed byte. "
+           "Decoded: signed(byte)×0.007813+1.0 = lambda. "
+           "Range: −50 (rich) to +15 (lean). Same layout as 4A0906266.", "lambda",
+           rpm_axis=RPM_AXIS_AAH, load_axis=LOAD_AXIS_MMS200,
+           decode=fuel_lambda_decode, encode=fuel_lambda_encode),
+    MapDef("Primary Timing",     0x0100, 16, 16,
+           "Primary ignition advance map (KFZW). Deg BTDC. "
+           "Same layout as 4A0906266.", "deg BTDC",
+           rpm_axis=RPM_AXIS_AAH, load_axis=LOAD_AXIS_MMS200,
+           decode=timing_decode, encode=timing_encode),
+    MapDef("Timing Knock Safety",0x1000, 16, 16,
+           "Knock fallback timing map (KFZW2). Deg BTDC. "
+           "Same layout as 4A0906266.", "deg BTDC",
+           rpm_axis=RPM_AXIS_AAH, load_axis=LOAD_AXIS_MMS200,
+           decode=timing_decode, encode=timing_encode),
+    MapDef("Idle Ignition Trim", 0x0C10,  1, 16,
+           "Idle ignition correction vs coolant temp (MAP5). "
+           "Stock: 12→22 deg cold→warm.", "deg",
+           decode=timing_decode, encode=timing_encode),
+    MapDef("RPM Limit",          0x077D,  1,  1,
+           "Rev limiter (NMAX). 16-bit LE at 0x077D. RPM = raw_uint16 / 4. "
+           "Stock: 25600 → 6400 RPM. NOTE: displayed as raw uint16.", "raw"),
+]
 
 ROM_MMS200 = ROMVariant(
     name="MMS-200 2.8 V6", version_key="MMS200", part_number="8A0906266A",
-    chip="27C512",   # unconfirmed — placeholder
-    size=32768,      # unconfirmed — placeholder
-    description="Audi 90/A6 C4 2.8 V6 12v (AAH/ACK) — MMS-200 platform. "
-                "STUB: no ROM dump available, map addresses unconfirmed.",
+    chip="27C512", size=32768,
+    description="Audi 90/A6/100 C4 2.8 V6 12v (AAH/ACK) — Hitachi MMS-200 platform. "
+                "Same ROM map layout as 4A0906266 (MMS100). "
+                "NMAX is 16-bit LE at 0x077D (RPM=raw/4). Checksum scheme unknown.",
     maps=_MAPS_MMS200,
-    checksum={},     # unknown
+    checksum={},
+    known_crc32s=[0x1f78f1fe],
+    reset_vector=None,
+)
+
+# ---------------------------------------------------------------------------
+# MMS-300 — 8A0906266B  (stub)
+# ---------------------------------------------------------------------------
+#
+# Hardware:
+#   ECU hardware:  Hitachi MMS-300
+#   Part number:   8A0 906 266 B
+#   Engine:        AAH/ACK 2.8L V6 12v (later revision)
+#
+# ROM layout (from 8A0906266B-MMS300.xdf — DIFFERENT from MMS200):
+#   KFKES  0x0700  16×16  Fuel map
+#   KFZW   0x1100  16×16  Timing map 1
+#   KFZW2  0x1200  16×16  Timing map 2
+#   NMAX   0x0524  16-bit  Rev limiter (formula TBD)
+#
+# No ROM dump available yet — stub only.
+# ---------------------------------------------------------------------------
+
+_MAPS_MMS300: list = []   # unknown until dump obtained
+
+ROM_MMS300 = ROMVariant(
+    name="MMS-300 2.8 V6", version_key="MMS300", part_number="8A0906266B",
+    chip="27C512", size=32768,
+    description="Audi 2.8 V6 (AAH/ACK) — Hitachi MMS-300 platform. "
+                "STUB: no ROM dump available. Map addresses from XDF only.",
+    maps=_MAPS_MMS300,
+    checksum={},
     known_crc32s=[],
     reset_vector=None,
 )
@@ -644,11 +711,9 @@ ROM_MMS200 = ROMVariant(
 # Registry
 # ---------------------------------------------------------------------------
 
-ALL_VARIANTS: list[ROMVariant] = [ROM_266D, ROM_266B, ROM_AAH]
-# ROM_MMS200 intentionally excluded from ALL_VARIANTS until a dump is obtained
-# and map addresses are confirmed. Add it here once verified.
-# ALL_VARIANTS.append(ROM_MMS200)
-
+ALL_VARIANTS: list[ROMVariant] = [ROM_266D, ROM_266B, ROM_AAH, ROM_MMS200]
+# ROM_MMS300 excluded until ROM dump obtained
+# ALL_VARIANTS.append(ROM_MMS300)
 
 _CRC32_MAP: dict[int, ROMVariant] = {}
 for _v in ALL_VARIANTS:
