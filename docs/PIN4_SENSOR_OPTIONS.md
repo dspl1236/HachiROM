@@ -96,12 +96,22 @@ decode table to apply to the analog ADC reading on its input pin.
 
 ## Availability
 
-| MAF setup | Pin 4 | CO pot patch needed |
-|-----------|-------|---------------------|
-| Stock 7A 4-pin (054 133 471) | CO pot wiper | Yes |
-| 1.8T 4-pin (AEB) | Unused | Yes (to prevent fault) |
-| 1.8T 5-pin (ATW/AWM) — integrated IAT | IAT signal | Yes |
-| AAH V6 3-wire (078 133 471) | Unused | Yes (to prevent fault) |
+**Supported ECUs:** Both 7A variants — 266D (MMS05C, 4-plug, post-3/90) and
+266B (MMS-04B, 2-plug, pre-3/90). Verified identical:
+- CO pot scalar block (0x0762–0x0779) — byte-for-byte same values
+- Safe ROM block (0x1E87–0x1FFF) — 100% 0xFF, zero code references in both
+- CO pot trim loop present in both firmware versions
+
+**Not applicable:** AAH/MMS100/MMS200 V6 ECUs — 3-wire MAF sensor, no pin 4 exists.
+
+| MAF setup | ECU | Pin 4 | CO pot patch needed |
+|-----------|-----|-------|---------------------|
+| Stock 7A 4-pin (054 133 471) | 266D or 266B | CO pot wiper | Yes |
+| 1.8T 4-pin (AEB) | 266D or 266B | Unused | Yes (to prevent fault) |
+| 1.8T 5-pin (ATW/AWM) — integrated IAT | 266D or 266B | IAT signal | Yes |
+| AAH V6 3-wire (078 133 471) | 266D or 266B | Unused | Yes (to prevent fault) |
+| AAH/MMS100 3-wire | 4A0906266 | N/A — no pin 4 | Not applicable |
+| MMS-200 | 8A0906266A | N/A — no pin 4 | Not applicable |
 
 ---
 

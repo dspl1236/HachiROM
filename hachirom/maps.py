@@ -759,10 +759,22 @@ def detect_pin4_patch(data: bytes) -> dict:
                            base + PIN4_VAL_AXIS_OFFSET + 16])
     has_data  = not all(b == 0xFF for b in adc_bytes)
 
-    if not has_data or sensor_type == PIN4_TYPE_NONE:
+    if not has_data and sensor_type not in (PIN4_TYPE_RAW,):
         return {'state': 'none', 'type': PIN4_TYPE_NONE,
                 'type_name': 'none', 'subtype': None,
                 'label': 'No sensor (pin 4 open)',
+                'adc_axis': None, 'val_axis': None}
+
+    if sensor_type == PIN4_TYPE_NONE:
+        return {'state': 'none', 'type': PIN4_TYPE_NONE,
+                'type_name': 'none', 'subtype': None,
+                'label': 'No sensor (pin 4 open)',
+                'adc_axis': None, 'val_axis': None}
+
+    if sensor_type == PIN4_TYPE_RAW:
+        return {'state': 'patched', 'type': PIN4_TYPE_RAW,
+                'type_name': 'raw', 'subtype': None,
+                'label': 'Raw ADC logging (no decode table)',
                 'adc_axis': None, 'val_axis': None}
 
     type_names = {

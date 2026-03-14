@@ -1488,11 +1488,12 @@ class HardwareTab(QWidget):
 
         layout.addWidget(self._section_header(
             "PIN 4 — FREED ADC INPUT",
-            "When a 3-wire MAF sensor is fitted (AAH V6 stock, 1.8T) or the "
-            "CO pot patch is applied, ECU pin 4 becomes a free 0–5V ADC input. "
-            "Select how you intend to use it — this generates wiring notes and "
-            "configures the Teensy logging channel. "
-            "ROM correction tables are planned for a future release."))
+            "Applies to both 266D (MMS05C, 4-plug) and 266B (MMS-04B, 2-plug). "
+            "Both use the same 4-pin MAF housing with CO pot on pin 4. "
+            "After applying the CO pot patch, pin 4 becomes a free 0–5V ADC input. "
+            "Select your sensor to write a linearisation table into the ROM — "
+            "the Teensy reads this to decode pin 4 values without extra wiring. "
+            "ROM correction loop requires a future firmware patch."))
 
         pin4_row = QHBoxLayout()
         pin4_row.setSpacing(12)
