@@ -671,7 +671,11 @@ ROM_MMS200 = ROMVariant(
                 "NMAX is 16-bit LE at 0x077D (RPM=raw/4). Checksum scheme unknown.",
     maps=_MAPS_MMS200,
     checksum={},
-    known_crc32s=[0x1f78f1fe],
+    known_crc32s=[0x1f78f1fe],   # V6AAHCoupeMMS200.bin
+    # Internal version string: "8A0906266A MMS-200C V6H9D34B4 3700"
+    # (V6H9 = V6 hardware rev 9, D34B4 = calibration ID, 3700 = build/date code)
+    # XDF source: NefMoto forum topic 2662 / topic 9732, author LHN
+    # "The MMS-200 definition file works on 4A0906266 MMS-100 and 8A0906266A MMS-200"
     reset_vector=None,
 )
 
