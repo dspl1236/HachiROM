@@ -42,6 +42,14 @@ All files are flat 32KB `.bin` images, ready for HachiROM.
 
 ---
 
+## 8A0906266B — MMS-300 (AAH/ACK 2.8 V6, later revision)
+
+| File | Source | CRC32 | Notes |
+|------|--------|-------|-------|
+| `8A0906266B_MMS300_stock.bin` | Community contribution | `0x84dde88e` | **Truncated dump** — original 61056 bytes padded to 32KB with 0xFF. Maps intact (fuel@0x0700, timing@0x1100/1200). NMAX 16-bit LE at 0x0524 → 6400 RPM. Last 3968 bytes are 0xFF. Full 32KB dump wanted. |
+
+---
+
 ## Wanted
 
 Needed to expand detection and map coverage — please open a GitHub issue:
