@@ -52,7 +52,6 @@ from .roms   import (ROMVariant, MapDef, ALL_VARIANTS,
 
 __version__ = "0.9.6"
 
-from .kwp import KWPMonitor, LiveValues, kwpbridge_available, kwpbridge_running
 
 __all__ = [
     "detect", "load_bin", "save_bin", "load_bin_normalised", "DetectionResult",

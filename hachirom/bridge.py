@@ -29,10 +29,8 @@ from .roms  import (ALL_VARIANTS, ROM_266D, ROM_266B, ROM_AAH,
                     timing_decode, timing_encode,
                     unscramble_034,
                     RPM_AXIS_266D, RPM_AXIS_266B, TIMING_RPM_AXIS,
-                    LOAD_AXIS, RPM_AXIS_AAH, LOAD_AXIS_AAH,
-                    CHECKSUM_PARAMS)
-from .maps  import (read_map, read_map_decoded, write_map, write_map_encoded,
-                    read_axis, read_scalar, write_scalar,
+                    LOAD_AXIS, RPM_AXIS_AAH, LOAD_AXIS_AAH)
+from .maps  import (read_map, read_map_decoded, write_map,
                     compute_sum, verify_checksum, apply_checksum,
                     compare_roms, diff_summary, DiffByte)
 from .detect import detect, load_bin, save_bin, DetectionResult

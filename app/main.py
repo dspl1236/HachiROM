@@ -2937,6 +2937,8 @@ class MainWindow(QMainWindow):
 
     def _build_menu(self):
         mb = self.menuBar()
+
+        # ── File ─────────────────────────────────────────────────────────────
         fm = mb.addMenu("File")
         for label, shortcut, slot in [
             ("Open ROM…",            "Ctrl+O",       self.open_rom),
@@ -2949,8 +2951,126 @@ class MainWindow(QMainWindow):
             fm.addAction(act)
         fm.addSeparator()
         fm.addAction("Quit", self.close)
+
+        # ── Tools ─────────────────────────────────────────────────────────────
+        tm = mb.addMenu("Tools")
+
+        self._act_kwp_status = QAction("KWPBridge: not running", self)
+        self._act_kwp_status.setEnabled(False)
+        tm.addAction(self._act_kwp_status)
+
+        tm.addSeparator()
+
+        act_kwp_info = QAction("Live Data Connection…", self)
+        act_kwp_info.setShortcut("Ctrl+K")
+        act_kwp_info.triggered.connect(self._show_kwp_dialog)
+        tm.addAction(act_kwp_info)
+
+        tm.addSeparator()
+
+        # Start a 2-second timer to keep the Tools menu label fresh
+        # even when no ROM is loaded and no live data is flowing.
+        self._kwp_poll_timer = QTimer(self)
+        self._kwp_poll_timer.timeout.connect(self._refresh_kwp_menu_label)
+        self._kwp_poll_timer.start(2000)
+
+        # ── Help ─────────────────────────────────────────────────────────────
         hm = mb.addMenu("Help")
         hm.addAction("About HachiROM", self._about)
+
+    def _refresh_kwp_menu_label(self):
+        """Update the Tools menu KWP status label (no ROM needed)."""
+        if not hasattr(self, '_act_kwp_status'):
+            return
+        if not kwpbridge_available():
+            self._act_kwp_status.setText("KWPBridge: not installed")
+        elif kwpbridge_running():
+            pn = self._kwp_monitor.current_pn()
+            if pn:
+                self._act_kwp_status.setText(f"KWPBridge: connected  ·  {pn}")
+            else:
+                self._act_kwp_status.setText("KWPBridge: running — no ECU")
+        else:
+            self._act_kwp_status.setText("KWPBridge: not running")
+
+    def _show_kwp_dialog(self):
+        """Show KWPBridge connection status dialog."""
+        from PyQt5.QtWidgets import QDialog, QVBoxLayout, QHBoxLayout, QDialogButtonBox
+
+        dlg = QDialog(self)
+        dlg.setWindowTitle("Live Data — KWPBridge Connection")
+        dlg.setMinimumWidth(420)
+        lay = QVBoxLayout(dlg)
+        lay.setSpacing(12)
+
+        def _status_widget():
+            """Build the status content."""
+            # Clear existing content
+            while lay.count() > 0:
+                item = lay.takeAt(0)
+                if item.widget():
+                    item.widget().deleteLater()
+
+            if not kwpbridge_available():
+                icon = QLabel("⚫")
+                icon.setStyleSheet("font-size: 28px;")
+                msg  = QLabel(
+                    "<b>KWPBridge is not installed.</b><br><br>"
+                    "HachiROM works fully standalone without it.<br><br>"
+                    "KWPBridge provides optional live ECU data overlay:<br>"
+                    "• Real-time RPM, load, coolant on the map tabs<br>"
+                    "• Lambda and ignition timing overlaid on cells<br>"
+                    "• Part-number safety gate before ROM writes<br><br>"
+                    "To use: run KWPBridge alongside HachiROM and connect<br>"
+                    "a KL-line interface to your ECU.")
+                msg.setWordWrap(True)
+            elif kwpbridge_running():
+                pn   = self._kwp_monitor.current_pn()
+                rom_pn = getattr(self.current_variant, 'part_number', '') \
+                         if self.current_variant else ''
+                if pn:
+                    matched  = self._kwp_matched
+                    dot      = "🟢" if matched else "🟡"
+                    match_txt = "ECU matches loaded ROM — live overlay active." \
+                                if matched else \
+                                f"ECU part number <b>{pn}</b> does not match " \
+                                f"loaded ROM <b>{rom_pn or '(none)'}</b>.<br>" \
+                                "Load the matching ROM to enable overlay."
+                    icon = QLabel(dot)
+                    icon.setStyleSheet("font-size: 28px;")
+                    msg  = QLabel(f"<b>KWPBridge connected.</b><br><br>"
+                                  f"ECU: <b>{pn}</b><br>{match_txt}")
+                    msg.setWordWrap(True)
+                else:
+                    icon = QLabel("🟡")
+                    icon.setStyleSheet("font-size: 28px;")
+                    msg  = QLabel(
+                        "<b>KWPBridge is running — no ECU detected.</b><br><br>"
+                        "Connect your KL-line interface and turn the ignition on.")
+                    msg.setWordWrap(True)
+            else:
+                icon = QLabel("🔴")
+                icon.setStyleSheet("font-size: 28px;")
+                msg  = QLabel(
+                    "<b>KWPBridge is installed but not running.</b><br><br>"
+                    "HachiROM is fully operational without it.<br><br>"
+                    "Start KWPBridge to enable live ECU data overlay.<br>"
+                    "It will be detected automatically within 2 seconds.")
+                msg.setWordWrap(True)
+
+            row = QHBoxLayout()
+            row.addWidget(icon)
+            row.addWidget(msg, 1)
+            w = QWidget()
+            w.setLayout(row)
+            lay.addWidget(w)
+
+            bb = QDialogButtonBox(QDialogButtonBox.Ok)
+            bb.accepted.connect(dlg.accept)
+            lay.addWidget(bb)
+
+        _status_widget()
+        dlg.exec_()
 
 
     # ── UI ───────────────────────────────────────────────────────────────────
@@ -3118,7 +3238,8 @@ class MainWindow(QMainWindow):
         self._update_kwp_ui(lv)
 
     def _update_kwp_ui(self, lv: LiveValues = None):
-        """Refresh KWP status across all relevant tabs."""
+        """Refresh KWP status across all relevant tabs and menu label."""
+        self._refresh_kwp_menu_label()
         if not self._overview_tab:
             return
         rom_pn = getattr(self.current_variant, 'part_number', '') if self.current_variant else ''

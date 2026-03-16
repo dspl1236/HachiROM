@@ -16,7 +16,6 @@ native ROM bytes before reading any addresses below.
 
 from dataclasses import dataclass, field
 from typing import Optional, Callable
-import zlib
 
 
 # ---------------------------------------------------------------------------
