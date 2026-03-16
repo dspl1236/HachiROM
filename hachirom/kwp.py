@@ -1,14 +1,22 @@
 """
 hachirom/kwp.py — KWPBridge integration for HachiROM.
 
-Thin wrapper around kwpbridge.client that:
-  - polls KWPBridge on localhost:50266
-  - emits Qt signals for state changes
-  - provides the safety gate (part number match check)
-  - extracts 7A-specific values from state dicts
+Design
+------
+KWPMonitor is ALWAYS a proper QObject with proper pyqtSignal declarations.
+KWPBridge is entirely optional — if not installed or not running, the monitor
+polls silently and no signals fire. HachiROM works standalone without any
+connection to KWPBridge.
 
-Designed to degrade gracefully — if kwpbridge is not installed or
-not running, HachiROM works exactly as before.
+When KWPBridge IS running:
+  - Monitor detects it automatically within ~1 second
+  - Emits connected(ecu_pn) once ECU handshake completes
+  - Streams live_data(LiveValues) at the poll rate (default 1 Hz)
+  - Emits mismatch(ecu_pn, rom_pn) if connected ECU ≠ loaded ROM
+  - Emits disconnected() if KWPBridge stops
+
+The same pattern is used in UrROM, HachiROM, and MESevenTool.
+All three tools are standalone — KWPBridge is an optional live-data link.
 """
 
 import logging
@@ -16,21 +24,35 @@ from typing import Optional
 
 log = logging.getLogger(__name__)
 
-# ── Optional import — KWPBridge may not be installed ────────────────────────
+DEFAULT_PORT = 50266
+
+# ── Optional: kwpbridge package ──────────────────────────────────────────────
 
 try:
-    from kwpbridge.client import KWPClient, is_running as _kwp_is_running
-    from kwpbridge.constants import DEFAULT_PORT
+    from kwpbridge.client import KWPClient
+    try:
+        from kwpbridge.client import is_running as _kwp_is_running
+    except ImportError:
+        def _kwp_is_running(port=DEFAULT_PORT):
+            """Fallback: try a socket connect."""
+            import socket
+            try:
+                s = socket.create_connection(("127.0.0.1", port), timeout=0.3)
+                s.close()
+                return True
+            except OSError:
+                return False
     _KWP_AVAILABLE = True
 except ImportError:
+    KWPClient      = None          # type: ignore
     _KWP_AVAILABLE = False
-    DEFAULT_PORT   = 50266
 
-try:
-    from PyQt5.QtCore import QObject, QTimer, pyqtSignal
-    _QT_AVAILABLE = True
-except ImportError:
-    _QT_AVAILABLE = False
+    def _kwp_is_running(port=DEFAULT_PORT):
+        return False
+
+# ── Qt — always required for this module ─────────────────────────────────────
+
+from PyQt5.QtCore import QObject, QTimer, pyqtSignal   # noqa: E402
 
 
 def kwpbridge_available() -> bool:
@@ -39,68 +61,49 @@ def kwpbridge_available() -> bool:
 
 
 def kwpbridge_running() -> bool:
-    """True if KWPBridge is running on localhost:50266."""
-    if not _KWP_AVAILABLE:
-        return False
+    """True if KWPBridge server is accepting connections on localhost."""
     try:
         return _kwp_is_running(port=DEFAULT_PORT)
     except Exception:
         return False
 
 
-# ── Live values extracted from a state dict ──────────────────────────────────
+# ── LiveValues ────────────────────────────────────────────────────────────────
 
 class LiveValues:
     """
-    Decoded 7A measuring block values from a KWPBridge state dict.
-
-    All values are None if not available (KWPBridge not connected,
-    or cell not present in state).
+    Decoded measuring-block values from a KWPBridge state dict.
+    All fields are None if KWPBridge is not connected or the cell is absent.
     """
 
     def __init__(self, state: dict):
-        self.rpm:     Optional[float] = None
-        self.load:    Optional[float] = None   # raw 1-255
-        self.load_pct: Optional[float] = None  # 0-100%
-        self.coolant: Optional[float] = None   # °C
-        self.lambda_:  Optional[float] = None  # λ (1.0 = stoich)
-        self.timing:  Optional[float] = None   # °BTDC
-        self.battery: Optional[float] = None   # V
-        self.ecu_pn:  str = ""
+        self.rpm:      Optional[float] = None
+        self.load:     Optional[float] = None
+        self.load_pct: Optional[float] = None
+        self.coolant:  Optional[float] = None
+        self.lambda_:  Optional[float] = None
+        self.timing:   Optional[float] = None
+        self.battery:  Optional[float] = None
+        self.ecu_pn:   str = ""
 
         if not state or not state.get("connected"):
             return
 
         self.ecu_pn = state.get("ecu_id", {}).get("part_number", "")
-
         groups = state.get("groups", {})
-
-        # Primary group — always broadcast as "0" by mock server
         group0 = groups.get("0", groups.get(0, {}))
         cells  = {c["index"]: c for c in group0.get("cells", [])}
 
-        # Detect cell layout by ECU part number family
-        # Digifant 1 (037-906-xxx): RPM=cell1, load=cell2, coolant=cell3
-        # 7A / AAH (893906266x, 4A0906266x): RPM=cell3, load=cell2, coolant=cell1
         pn_upper = self.ecu_pn.upper()
         is_digifant = pn_upper.startswith("037906") or pn_upper.startswith("039906")
 
         if is_digifant:
-            # Digifant 1 group 1 layout (sent as group 0 by mock)
-            rpm_cell     = 1
-            load_cell    = 2
-            coolant_cell = 3
-            lambda_cell  = None   # O2S is voltage in separate group, not λ
-            timing_cell  = None
-            battery_cell = None
+            rpm_cell, load_cell, coolant_cell = 1, 2, 3
+            lambda_cell = timing_cell = battery_cell = None
         else:
-            # 7A / AAH / Motronic layout — group 0
-            rpm_cell     = 3
-            load_cell    = 2
-            coolant_cell = 1
-            lambda_cell  = 8
-            timing_cell  = 10
-            battery_cell = 4
+            # 7A / AAH / Motronic
+            rpm_cell, load_cell, coolant_cell = 3, 2, 1
+            lambda_cell, timing_cell, battery_cell = 8, 10, 4
 
         def _val(idx):
             if idx is None:
@@ -116,201 +119,186 @@ class LiveValues:
         self.battery  = _val(battery_cell)
 
         if self.load is not None:
-            # 7A reports raw ADC (1-255) → convert to %
-            # AAH reports calculated load (already 0-100 range)
-            # Detect: if value > 100 it must be raw ADC
-            if self.load > 100:
-                self.load_pct = (self.load / 255.0) * 100.0
-            else:
-                self.load_pct = self.load   # already a percentage
+            self.load_pct = (self.load / 255.0 * 100.0
+                             if self.load > 100 else self.load)
 
     @property
     def valid(self) -> bool:
         return self.rpm is not None
 
     def lambda_colour(self) -> str:
-        """Return hex colour string based on lambda value."""
         if self.lambda_ is None:
             return "#444444"
         if 0.95 <= self.lambda_ <= 1.05:
-            return "#2dff6e"   # green — at target
+            return "#2dff6e"
         if 0.85 <= self.lambda_ < 0.95 or 1.05 < self.lambda_ <= 1.15:
-            return "#ffaa00"   # amber — off target
-        return "#ff4444"       # red — significantly off
+            return "#ffaa00"
+        return "#ff4444"
 
 
-# ── Qt signal emitter (only built when Qt is available) ─────────────────────
+# ── KWPMonitor ────────────────────────────────────────────────────────────────
 
-if _QT_AVAILABLE and _KWP_AVAILABLE:
+class KWPMonitor(QObject):
+    """
+    Qt object that polls KWPBridge and emits signals for HachiROM / UrROM.
 
-    class KWPMonitor(QObject):
-        """
-        Qt object that wraps KWPClient and emits signals for HachiROM.
+    pyqtSignal declarations MUST be at class level — never inside a
+    conditional block — so that PyQt's metaclass finds them regardless
+    of whether kwpbridge is installed.
 
-        Signals
-        -------
-        connected(str)        — ecu part number when KWPBridge connects
-        disconnected()        — KWPBridge disconnected or stopped
-        live_data(LiveValues) — new state received (fires at poll rate)
-        mismatch(str, str)    — (ecu_pn, rom_pn) when part numbers don't match
-        """
+    Signals
+    -------
+    connected(str)        ecu part number when KWPBridge connects
+    disconnected()        KWPBridge disconnected or stopped
+    live_data(object)     LiveValues on each poll
+    mismatch(str, str)    (ecu_pn, rom_pn) when PNs don't match
+    """
 
-        connected    = pyqtSignal(str)        # ecu part number
-        disconnected = pyqtSignal()
-        live_data    = pyqtSignal(object)     # LiveValues
-        mismatch     = pyqtSignal(str, str)   # (ecu_pn, rom_pn)
+    connected    = pyqtSignal(str)
+    disconnected = pyqtSignal()
+    live_data    = pyqtSignal(object)
+    mismatch     = pyqtSignal(str, str)
 
-        def __init__(self, parent=None):
-            super().__init__(parent)
-            self._client:   KWPClient | None = None
-            self._rom_pns:  list[str] = []   # all accepted PNs (normalised)
-            self._matched   = False
-            self._was_connected = False
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._client  = None          # KWPClient instance or None
+        self._rom_pns: list[str] = []
+        self._matched  = False
 
-            self._timer = QTimer(self)
-            self._timer.timeout.connect(self._poll)
-            self._timer.start(1000)
+        self._timer = QTimer(self)
+        self._timer.timeout.connect(self._poll)
+        self._timer.start(1000)
 
-        def set_rom_part_number(self, pn: str):
-            """Single-PN convenience wrapper — kept for backwards compatibility."""
-            self.set_rom_part_numbers([pn])
+    # ── Public API ────────────────────────────────────────────────────────────
 
-        def set_rom_part_numbers(self, pns: list[str]):
-            """
-            Tell the monitor which PNs are valid for the loaded ROM.
-            Any match activates the safety gate and enables the overlay.
-            Accepts both hyphenated (893-906-266-D) and bare (893906266D) forms.
-            """
-            self._rom_pns = [p.upper().replace("-", "").strip() for p in pns]
-            self._check_match()
+    def set_rom_part_number(self, pn: str):
+        """Single-PN convenience wrapper."""
+        self.set_rom_part_numbers([pn])
 
-        def start(self):
-            self._timer.start(1000)
+    def set_rom_part_numbers(self, pns: list):
+        """Set acceptable ROM part numbers. Any match enables the overlay."""
+        self._rom_pns = [p.upper().replace("-", "").strip() for p in pns]
+        self._check_match()
 
-        def stop(self):
-            self._timer.stop()
-            self._disconnect_client()
+    def start(self):
+        self._timer.start(1000)
 
-        def is_matched(self) -> bool:
-            """True when KWPBridge is connected AND ECU PN matches any loaded ROM PN."""
-            return self._matched
+    def stop(self):
+        self._timer.stop()
+        self._drop_client()
 
-        def current_pn(self) -> str:
-            if self._client and self._client.state:
-                return self._client.state.get(
-                    "ecu_id", {}).get("part_number", "")
-            return ""
+    def is_matched(self) -> bool:
+        return self._matched
 
-        # ── Internal ──────────────────────────────────────────────────────────
-
-        def _poll(self):
-            if self._client and self._client.connected:
+    def current_pn(self) -> str:
+        if self._client is not None:
+            try:
                 state = self._client.state
                 if state:
-                    lv = LiveValues(state)
-                    if lv.valid:
-                        self.live_data.emit(lv)
-                    self._check_match()
-                return
-            if kwpbridge_running():
-                self._connect_client()
+                    return state.get("ecu_id", {}).get("part_number", "")
+            except Exception:
+                pass
+        return ""
 
-        def _connect_client(self):
+    # ── Internal ──────────────────────────────────────────────────────────────
+
+    def _poll(self):
+        # If KWPBridge not installed, do nothing
+        if not _KWP_AVAILABLE:
+            return
+
+        # If we have an active client, poll it
+        if self._client is not None:
             try:
-                self._client = KWPClient(port=DEFAULT_PORT)
-                self._client.on_connect(self._on_kwp_connect)
-                self._client.on_disconnect(self._on_kwp_disconnect)
-                self._client.on_state(self._on_kwp_state)
-                self._client.connect(auto_reconnect=False)
-                log.info("KWPMonitor: connecting to KWPBridge")
+                if self._client.connected:
+                    state = self._client.state
+                    if state:
+                        lv = LiveValues(state)
+                        if lv.valid:
+                            self.live_data.emit(lv)
+                        self._check_match()
+                    return
             except Exception as e:
-                log.debug(f"KWPMonitor: connect error: {e}")
-                self._client = None
+                log.debug(f"KWPMonitor poll error: {e}")
+            # Client dropped
+            self._drop_client()
 
-        def _disconnect_client(self):
-            if self._client:
-                try:
-                    self._client.disconnect()
-                except Exception:
-                    pass
-                self._client = None
-            self._matched = False
+        # Try connecting if KWPBridge is running
+        if kwpbridge_running():
+            self._connect()
 
-        def _on_kwp_connect(self):
-            pn = self.current_pn()
-            log.info(f"KWPMonitor: KWPBridge connected, ECU={pn}")
-            self.connected.emit(pn)
-            self._check_match()
+    def _connect(self):
+        if not _KWP_AVAILABLE or KWPClient is None:
+            return
+        try:
+            self._client = KWPClient(port=DEFAULT_PORT)
+            self._client.on_connect(self._on_connect)
+            self._client.on_disconnect(self._on_disconnect)
+            self._client.on_state(self._on_state)
+            self._client.connect(auto_reconnect=False)
+            log.info("KWPMonitor: connecting to KWPBridge")
+        except Exception as e:
+            log.debug(f"KWPMonitor: connect error: {e}")
+            self._client = None
 
-        def _on_kwp_disconnect(self):
-            log.info("KWPMonitor: KWPBridge disconnected")
+    def _drop_client(self):
+        if self._client is not None:
+            try:
+                self._client.disconnect()
+            except Exception:
+                pass
+            self._client = None
+        if self._matched:
             self._matched = False
             self.disconnected.emit()
 
-        def _on_kwp_state(self, state: dict):
-            lv = LiveValues(state)
-            if lv.valid:
-                self.live_data.emit(lv)
-            self._check_match()
+    def _on_connect(self):
+        pn = self.current_pn()
+        log.info(f"KWPMonitor: connected, ECU={pn}")
+        self.connected.emit(pn)
+        self._check_match()
 
-        def _check_match(self):
-            if not self._client or not self._client.state:
-                if self._matched:
-                    self._matched = False
-                return
+    def _on_disconnect(self):
+        log.info("KWPMonitor: disconnected")
+        self._matched = False
+        self.disconnected.emit()
 
-            ecu_pn = self.current_pn().upper().replace("-", "").strip()
-            if not ecu_pn or not self._rom_pns:
-                self._matched = False
-                return
+    def _on_state(self, state: dict):
+        lv = LiveValues(state)
+        if lv.valid:
+            self.live_data.emit(lv)
+        self._check_match()
 
-            new_match = ecu_pn in self._rom_pns
-            if not new_match and ecu_pn:
-                self.mismatch.emit(ecu_pn, self._rom_pns[0] if self._rom_pns else "")
-            self._matched = new_match
-
-else:
-    # Stub when Qt or kwpbridge not available
-    class KWPMonitor:  # type: ignore
-        def __init__(self, parent=None):
-            pass
-        def set_rom_part_number(self, pn): pass
-        def set_rom_part_numbers(self, pns): pass
-        def start(self): pass
-        def stop(self):  pass
-        def is_matched(self) -> bool: return False
-        def current_pn(self) -> str:  return ""
+    def _check_match(self):
+        ecu_pn = self.current_pn().upper().replace("-", "").strip()
+        if not ecu_pn or not self._rom_pns:
+            self._matched = False
+            return
+        new_match = ecu_pn in self._rom_pns
+        if not new_match and ecu_pn:
+            self.mismatch.emit(ecu_pn,
+                               self._rom_pns[0] if self._rom_pns else "")
+        self._matched = new_match
 
 
-# ── Status string helpers ─────────────────────────────────────────────────────
+# ── Status helpers ────────────────────────────────────────────────────────────
 
-def status_label(monitor: "KWPMonitor", rom_pn: str) -> tuple[str, str]:
-    """
-    Return (text, colour) for the KWP status indicator.
-
-    States:
-      🔴  KWPBridge not available / not running
-      🟡  Connected but ECU ≠ ROM part number
-      🟢  Connected and ECU matches ROM
-    """
+def status_label(monitor: KWPMonitor, rom_pn: str) -> tuple:
+    """Return (text, colour_hex) for the KWP status indicator."""
     if not _KWP_AVAILABLE:
         return "KWPBridge not installed", "#555555"
-
     if not kwpbridge_running():
         return "KWPBridge not running", "#555555"
-
     ecu_pn = monitor.current_pn() if monitor else ""
     if not ecu_pn:
-        return "KWPBridge running — no ECU", "#ffaa00"
-
+        return "KWPBridge running — awaiting ECU", "#ffaa00"
     if monitor and monitor.is_matched():
         return f"🟢  {ecu_pn}  ·  ECU matches ROM", "#2dff6e"
-
     return f"🟡  {ecu_pn}  ≠  {rom_pn}  ·  mismatch", "#ffaa00"
 
 
-def live_summary(lv: "LiveValues") -> str:
-    """One-line summary string for the status strip."""
+def live_summary(lv: LiveValues) -> str:
+    """One-line summary for the status strip."""
     if lv is None or not lv.valid:
         return ""
     parts = []
