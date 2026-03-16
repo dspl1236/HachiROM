@@ -3298,10 +3298,20 @@ class MainWindow(QMainWindow):
             f"confidence: {result.confidence}")
 
         # Tell KWP monitor what ROM is loaded — enables safety gate
+        # Pass all PNs in the variant family so either ECU activates the overlay.
         if result.variant:
             pn = getattr(result.variant, 'part_number', '')
             if pn:
-                self._kwp_monitor.set_rom_part_number(pn)
+                # Build full PN set for this variant family
+                _PN_FAMILIES = {
+                    "893906266D": ["893906266D", "893906266B"],   # 7A late + early
+                    "893906266B": ["893906266D", "893906266B"],
+                    "4A0906266":  ["4A0906266",  "8A0906266A", "8A0906266B"],  # AAH
+                    "8A0906266A": ["4A0906266",  "8A0906266A", "8A0906266B"],
+                    "8A0906266B": ["4A0906266",  "8A0906266A", "8A0906266B"],
+                }
+                pns = _PN_FAMILIES.get(pn, [pn])
+                self._kwp_monitor.set_rom_part_numbers(pns)
                 self._update_kwp_ui()
 
     # ── Save helpers ──────────────────────────────────────────────────────────

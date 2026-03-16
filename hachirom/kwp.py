@@ -163,19 +163,25 @@ if _QT_AVAILABLE and _KWP_AVAILABLE:
         def __init__(self, parent=None):
             super().__init__(parent)
             self._client:   KWPClient | None = None
-            self._rom_pn:   str = ""
+            self._rom_pns:  list[str] = []   # all accepted PNs (normalised)
             self._matched   = False
             self._was_connected = False
 
-            # Poll timer — checks KWPBridge every second when not connected,
-            # faster when connected (state comes from broadcast anyway)
             self._timer = QTimer(self)
             self._timer.timeout.connect(self._poll)
             self._timer.start(1000)
 
         def set_rom_part_number(self, pn: str):
-            """Tell the monitor what ROM is loaded — used for safety gate."""
-            self._rom_pn = pn.upper().replace("-", "").strip()
+            """Single-PN convenience wrapper — kept for backwards compatibility."""
+            self.set_rom_part_numbers([pn])
+
+        def set_rom_part_numbers(self, pns: list[str]):
+            """
+            Tell the monitor which PNs are valid for the loaded ROM.
+            Any match activates the safety gate and enables the overlay.
+            Accepts both hyphenated (893-906-266-D) and bare (893906266D) forms.
+            """
+            self._rom_pns = [p.upper().replace("-", "").strip() for p in pns]
             self._check_match()
 
         def start(self):
@@ -186,7 +192,7 @@ if _QT_AVAILABLE and _KWP_AVAILABLE:
             self._disconnect_client()
 
         def is_matched(self) -> bool:
-            """True when KWPBridge is connected AND ECU matches loaded ROM."""
+            """True when KWPBridge is connected AND ECU PN matches any loaded ROM PN."""
             return self._matched
 
         def current_pn(self) -> str:
@@ -199,7 +205,6 @@ if _QT_AVAILABLE and _KWP_AVAILABLE:
 
         def _poll(self):
             if self._client and self._client.connected:
-                # Already connected — process state
                 state = self._client.state
                 if state:
                     lv = LiveValues(state)
@@ -207,8 +212,6 @@ if _QT_AVAILABLE and _KWP_AVAILABLE:
                         self.live_data.emit(lv)
                     self._check_match()
                 return
-
-            # Not connected — check if KWPBridge is now running
             if kwpbridge_running():
                 self._connect_client()
 
@@ -257,13 +260,13 @@ if _QT_AVAILABLE and _KWP_AVAILABLE:
                 return
 
             ecu_pn = self.current_pn().upper().replace("-", "").strip()
-            if not ecu_pn or not self._rom_pn:
+            if not ecu_pn or not self._rom_pns:
                 self._matched = False
                 return
 
-            new_match = (ecu_pn == self._rom_pn)
+            new_match = ecu_pn in self._rom_pns
             if not new_match and ecu_pn:
-                self.mismatch.emit(ecu_pn, self._rom_pn)
+                self.mismatch.emit(ecu_pn, self._rom_pns[0] if self._rom_pns else "")
             self._matched = new_match
 
 else:
@@ -272,6 +275,7 @@ else:
         def __init__(self, parent=None):
             pass
         def set_rom_part_number(self, pn): pass
+        def set_rom_part_numbers(self, pns): pass
         def start(self): pass
         def stop(self):  pass
         def is_matched(self) -> bool: return False
