@@ -16,6 +16,9 @@ Windows `.exe`, macOS, and Linux binaries — no install required.
 
 ---
 
+> **⚠ Before writing any ROM** — always read and save the original chip first. Read it twice, compare the files, keep both copies safe. A write to the wrong address is silent and only shows at startup.
+
+
 ## Supported ECUs — Hitachi MMS family
 
 | Part number | Hardware | Engine | Connector | Notes |
