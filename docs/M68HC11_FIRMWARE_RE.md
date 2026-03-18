@@ -604,3 +604,187 @@ apply a load-weighted correction — this needs tracing to confirm.
 | Option A firmware patch | ❌ Pending $0024 full trace |
 | Option B Teensy bus intercept | 🔶 Target address identified |
 | Live closed-loop wideband correction | ❌ Pending above |
+
+---
+
+## Live RE Session — 266D Binary Analysis
+
+*Results from direct analysis of 893906266D_MMS05C_stock.bin (32KB)*
+
+### MCU Confirmed: Hitachi HD6303, NOT M68HC11
+
+The firmware contains opcodes that do not exist in the standard M68HC11
+instruction set, conclusively identifying the CPU as a **Hitachi HD6303**
+(or closely related HD6301):
+
+| Opcode | HD6303 mnemonic | Notes |
+|--------|----------------|-------|
+| `0x61 imm dp` | AIM — AND immediate to direct | Not in M68HC11 |
+| `0x62 imm dp` | OIM — OR immediate to direct | Not in M68HC11 |
+| `0x63 imm dp` | EIM — XOR immediate to direct | Not in M68HC11 |
+| `0x6B imm off` | AIM — AND immediate, indexed | Not in M68HC11 |
+| `0x71 imm off` | AIM indexed | Not in M68HC11 |
+| `0x72 imm off` | OIM indexed | Not in M68HC11 |
+| `0x7B imm off` | EIM indexed | Not in M68HC11 |
+| `0x18` | XGDX — exchange D and X | M68HC11 uses 0x18 as Y-register prefix |
+| `0x1A` | SLP — sleep mode | HD6303-specific |
+
+**Critical implication:** The M68HC11 reference manual is **wrong** for this
+CPU. The HD6303 has a different internal register map, different interrupt
+behaviour, and crucially — **no on-chip ADC**. The M68HC11 ADC at
+`$1030–$1034` does not exist on the HD6303.
+
+Reference: Hitachi HD6303R / HD6301V datasheet (supersedes M68HC11RM for
+this firmware).
+
+---
+
+### Internal I/O Register Map Correction
+
+On the HD6303, internal I/O registers are at `$0000–$001F` (direct page),
+**not** at `$1000–$103F` as on the M68HC11.
+
+**Direct page hotspots** (most accessed `$00–$3F` addresses):
+
+| Address | Access count | Likely function |
+|---------|-------------|-----------------|
+| `$03` | 102 | Port 2 data or primary status flags |
+| `$26` | 44 | Major working register |
+| `$00` | 38 | Major working register |
+| `$17` | 30 | Dispatch / subroutine pointer |
+| `$24–$25` | 28 each | Working registers |
+
+The AIM/OIM instructions (`AIM #xx, $00,X` with varied X values) are
+performing bit-flag operations on RAM-based status bytes — a common
+pattern in Hitachi ECU firmware for state machine flags.
+
+---
+
+### External Hardware at $1000–$10FF
+
+Since `$1000+` is external address space on the HD6303, the hardware
+the firmware accesses here is on the ECU PCB itself — likely a
+combination of external peripheral ICs and latched I/O.
+
+**External register access map (from firmware scan):**
+
+| Address | R/W | Count | Hypothesis |
+|---------|-----|-------|------------|
+| `$1006` | R+W | 36 | Control/status register (heavily used) |
+| `$1007` | R | 10 | Port input data |
+| `$1008–$1009` | R | 4 each | Port input data |
+| `$1032` | R only | 2 | Status/ADC input — read then BITA #$20 (test bit 5) |
+| `$1034` | W only | 14 | Output control register |
+| `$1035` | W only | 8 | Output control / init |
+| `$1036` | W only | 16 | Frequently updated output |
+| `$1050–$106E` | W (16-bit) | Various | Injection pulse timing (STD/STX pairs) |
+
+The `$1050–$106E` range receives 16-bit `STD`/`STX` writes — likely
+injection pulsewidth timing values fed to an external timer latch.
+
+---
+
+### CO Pot ADC — Revised Understanding
+
+**The HD6303 has no on-chip ADC.** The CO pot signal therefore must be
+converted by external hardware on the ECU board, accessed via the
+memory-mapped `$1000` range.
+
+The only read-only access to this range that involves bit-testing is:
+```
+$259A:  LDAA $1032      ; read external register
+$259D:  BITA #$20       ; test bit 5
+$259F:  BNE $25AD       ; branch if bit set
+```
+
+This pattern (read a byte, test a specific bit) suggests either:
+1. **Comparator output** — an external voltage comparator comparing the
+   CO pot voltage against a reference, with the result latched as bit 5
+   of `$1032`. The ECU would do successive approximation (bit-bang) to
+   determine the analog value.
+2. **Port expander status** — the bit reflects an analog threshold
+   crossing fed from external signal conditioning.
+
+This is architecturally different from the M68HC11 ADC scenario and means
+the pin 4 correction loop approach needs to be reconsidered once the
+`$1032` circuit is understood from the ECU schematic.
+
+---
+
+### Confirmed Entry Points
+
+| Vector | Address | Target | In ROM? |
+|--------|---------|--------|---------|
+| RESET | `$FFFE` | `$E8B1` | Yes (ROM+`$68B1`) |
+| OC1 | `$FFE8` | `$BC43` | Yes — **fuel ISR candidate** |
+| OC3 | `$FFE4` | `$A5F2` | Yes |
+| IC1 | `$FFEE` | `$AC19` | Yes |
+| IC2 | `$FFEC` | `$AB5D` | Yes |
+| RTI | `$FFF0` | `$AB37` | Yes |
+| OC4 | `$FFE2` | `$1124` | Lower half / external |
+| OC5 | `$FFE0` | `$1989` | Lower half / external |
+| SCI | `$FFD6` | `$3220` | Lower half / external |
+
+OC1 at `$BC43` is the primary candidate for the fuel calculation ISR
+(Output Compare 1 = highest-priority timer interrupt, fires every
+crankshaft event).
+
+---
+
+### Updated 266D.CFG Template
+
+```
+; DHC11 config — 266D / HD6303
+INPUT   266D_stock.bin
+OUTPUT  266D_disasm.asm
+LOAD    $8000
+ADDRESSES
+OPCODES
+
+; Entry points
+ENTRY   $E8B1   RESET_HANDLER
+ENTRY   $BC43   OC1_FUEL_ISR
+ENTRY   $A5F2   OC3_ISR
+ENTRY   $AC19   IC1_ISR
+ENTRY   $AB5D   IC2_ISR
+ENTRY   $AB37   RTI_ISR
+ENTRY   $EB77   CLOCK_MON_ISR
+ENTRY   $A214   ILLEGAL_OP_ISR
+
+; HD6303 internal I/O (direct page $00-$1F)
+; NOTE: NOT M68HC11 register map
+; Exact assignments need HD6303 datasheet cross-reference
+
+; External hardware ($1000 range — PCB peripheral ICs)
+LABEL   $1006   EXT_CTRL_06
+LABEL   $1007   EXT_PORT_07
+LABEL   $1032   EXT_STATUS_32   ; CO pot / comparator input (bit 5)
+LABEL   $1034   EXT_OUT_34
+LABEL   $1035   EXT_OUT_35
+LABEL   $1036   EXT_OUT_36
+
+; Known calibration tables
+LABEL   $9E87   PIN4_TABLE      ; Teensy sensor linearisation table
+LABEL   $9EC7   PIN4_SENSOR_TYPE
+
+; Safe block — no code references
+BYTES   $9E87   66  SAFE_BLOCK_DATA
+```
+
+---
+
+### Status (Updated)
+
+| Task | Status |
+|------|--------|
+| MCU architecture identified | ✓ **HD6303, not M68HC11** |
+| HD6303 instruction set differences documented | ✓ |
+| ADC system — on-chip | ✓ **Does not exist on HD6303** |
+| External hardware map `$1000–$10FF` | ✓ Partially mapped |
+| `$1032` read — CO pot circuit | ❓ Likely comparator, needs schematic |
+| `$1034/$1036` — output registers | ❓ Needs tracing |
+| OC1 ISR at `$BC43` — fuel loop | ❌ Not yet disassembled |
+| Safe block at `$9E87` | ✓ Confirmed both 266D and 266B |
+| Teensy sensor table | ✓ Implemented |
+| Correction loop — Option A | ❌ Pending `$1032` circuit understanding |
+| HD6303 datasheet — obtain and cross-reference | ❌ **Priority action** |
