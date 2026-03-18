@@ -445,3 +445,162 @@ Bootstrap is documented here because:
 | pcmhacking.net — DHC11 ECU RE thread | `https://pcmhacking.net/forums/viewtopic.php?t=1573` |
 | HachiROM PIN4_SENSOR_OPTIONS.md | `docs/PIN4_SENSOR_OPTIONS.md` |
 | HachiROM roms.py — confirmed map addresses | `hachirom/roms.py` ROM_266D / ROM_266B |
+
+---
+
+## Live Disassembly Session — 266D Firmware RE Results
+
+*March 2026 — First complete RE session on 893906266D_MMS05C_stock.bin*
+
+### Architecture Corrections vs Initial Assumptions
+
+**The MCU is NOT accessing ADC at $1030–$1034.** The standard M68HC11
+internal ADC registers were never written in the entire 64KB firmware image.
+The OPTION register ($1039) was never written, confirming the on-chip ADC
+was never initialised. The MCU uses an **external, memory-mapped ADC** on
+the ECU board instead.
+
+**The MCU I/O base is $1000, not the M68HC11-standard internal registers.**
+The firmware accesses:
+- `$1006` = ADC control/trigger register
+- `$1007` = ADC 8-bit result register
+- `$1009` = secondary ADC result register
+- `$1034`/`$1035` = DAC or reference output registers (written with specific
+  values $7F, $DB, $FB — these set thresholds or DAC outputs, not ADC
+  channel select)
+
+**The ISR vectors at $1124 (OC4) and $1989 (OC5) point into the lower 32KB
+of the 64KB EPROM,** which is mapped into the external address space at
+$0000–$7FFF. The lower half contains both calibration tables AND interrupt
+service routine code — it is not a mirror of the upper half in terms of
+code, though the calibration tables at the start are mirrored. This is
+confirmed by the boot initialisation loop at $E9DD which copies timer
+configuration from ROM $FE00–$FE80 into I/O registers at $1020–$10A0.
+
+---
+
+### Confirmed ADC Interface
+
+The ECU board has an external ADC accessed via memory-mapped registers:
+
+| Register | Address | Function |
+|----------|---------|----------|
+| ADC_CTRL | `$1006` | Write = start conversion (encodes channel), Read bit7 = done |
+| ADC_RESULT | `$1007` | 8-bit conversion result |
+| ADC_REG9 | `$1009` | Secondary ADC result register |
+| DAC_REF_A | `$1034` | Reference/DAC output register (write only) |
+| DAC_REF_B | `$1035` | Reference/DAC output register (write only) |
+
+**ADC conversion sequence (confirmed from multiple ISR traces):**
+```asm
+LDAA  #$28          ; channel select code (0x28 = CO pot channel 8)
+STAA  $1006         ; write to ADC_CTRL — starts conversion
+; ... time passes (next ISR cycle) ...
+LDAA  $1006         ; read ADC_CTRL
+BPL   *-3           ; loop while bit7=0 (conversion not done)
+LDAA  $1007         ; read ADC_RESULT — 8-bit value (0x00–0xFF)
+STAA  $16F4         ; store CO pot result to RAM
+```
+
+**Channel select codes confirmed:**
+
+| Code | Channel | Result stored | Purpose (inferred) |
+|------|---------|--------------|-------------------|
+| `$20` | 0 | (next cycle after ch8) | Engine parameter (TPS/load?) |
+| `$21` | 1 | (from $ACB5 context) | Unknown |
+| `$24` | 4 | `$164B`, `$165C` | Boot calibration reference |
+| `$28` | **8** | **`$16F4`** | **CO pot / MAF pin 4** |
+| `$29` | 9 | `$164F` | Boot check (compared vs ROM constant `$8A89`) |
+
+---
+
+### CO Pot ADC — Confirmed Location and Usage
+
+**CO pot = ADC channel 8 (select code `$28`)**
+**Result stored to RAM address `$16F4`**
+
+Confirmed from two independent traces:
+1. **OC3 ISR ($A583):** writes `$28` to `$1006`, starts CO pot conversion
+2. **OC2 ISR ($A641):** polls `$1006`, reads `$1007` → stores to `$16F4`
+3. **Immediately after:** writes `$20` to `$1006` — starts next channel (ch0)
+
+**CO pot result is used in fuel calculation at $A348:**
+```
+$A33D  LDAA ADC_CTRL  ; poll — wait for previous ADC (ch0) to complete
+$A340  BPL  $A33D     ; loop
+$A342  LDAA ADC_RESULT ; read ch0 result
+$A345  STAA $149D      ; store ch0 result to RAM
+$A348  LDAA ADC_CH8    ; load CO pot value ($16F4)  ← CO POT READ
+$A34B  SUBA $149D      ; A = CO_pot - ch0_reading (signed delta)
+$A34D  JSR  <$24       ; call fuel trim subroutine with delta in A
+; ... (returns to ISR, proceeds to ignition/fuel table accesses) ...
+$A3AC  LDAA #$FB
+$A3AE  STAA $1034      ; write $FB to DAC_REF_A (set threshold for next cycle)
+$A3B1  RTI
+```
+
+The subtraction `CO_pot($16F4) - ch0($149D)` produces a **signed delta**
+which is passed to a trim subroutine at `$0024`. This is the CO pot
+correction pathway. The trim adjusts the base fuel pulsewidth calculated
+from the fuel map (confirmed at `$1686`).
+
+---
+
+### Patch Target — CO Pot Correction Loop
+
+The patch insertion point is now confirmed:
+
+**Patch Option A (replace CO pot value before subtraction):**
+The Teensy intercepts ROM reads at the correction table addresses the ECU
+fetches during the `JSR <$24` subroutine, or more directly: the address
+`$16F4` in RAM is updated by the ECU from the ADC. The Teensy can write
+a calculated correction value to an address the subroutine at `$0024` reads
+from ROM, substituting a wideband-derived trim in place of the static ROM
+table value.
+
+**Patch Option B (firmware modification):**
+Replace the `LDAA ADC_CH8` at `$A348` with a `LDAA` from the Teensy-managed
+correction table at `$9E87+index`. The subroutine at `$0024` then sees a
+live correction value rather than the CO pot reading.
+
+The **load index** (`$166B`) and fuel pulsewidth result (`$1686`) are known
+from earlier RE sessions. The JSR `<$24` subroutine likely uses these to
+apply a load-weighted correction — this needs tracing to confirm.
+
+---
+
+### RAM Variables Confirmed
+
+| Address | Contents |
+|---------|----------|
+| `$16F4` | **CO pot ADC result (channel 8, 0x28)** |
+| `$149D` | ADC channel 0 result (current cycle) |
+| `$164B` | Boot ADC channel 4 result |
+| `$165C` | Boot ADC channel 4 result (copy) |
+| `$164F` | Boot ADC channel 9 result |
+| `$166B` | Load axis index (fuel map row) |
+| `$166C` | RPM axis index (fuel map column) |
+| `$1686` | Fuel pulsewidth calculation result |
+| `$15D5` | Interpolated map index |
+| `$1579` | ADC-derived parameter (used in fuel ISR) |
+| `$157D` | Channel/scan state variable |
+| `$1580` | State table base |
+
+---
+
+### Status (Updated)
+
+| Task | Status |
+|------|--------|
+| ADC register map — standard M68HC11 ($1030) | ✗ Wrong — not used |
+| ADC interface — external memory-mapped ($1006/$1007) | ✓ **CONFIRMED** |
+| CO pot ADC channel | ✓ **Channel 8, code $28** |
+| CO pot RAM result address | ✓ **$16F4** |
+| CO pot trim application point | ✓ **$A348 → JSR <$24** |
+| Trim subroutine at $0024 — fully traced | ❌ Needs lower-half disassembly |
+| Load index → correction table indexing | ❌ Pending $0024 trace |
+| Safe block at `$9E87` confirmed | ✓ Both 266D and 266B |
+| Teensy sensor table infrastructure | ✓ Implemented in HachiROM |
+| Option A firmware patch | ❌ Pending $0024 full trace |
+| Option B Teensy bus intercept | 🔶 Target address identified |
+| Live closed-loop wideband correction | ❌ Pending above |
