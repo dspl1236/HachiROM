@@ -2969,6 +2969,17 @@ class MainWindow(QMainWindow):
 
         tm.addSeparator()
 
+        act_dash = QAction("Dashboard…", self)
+        act_dash.setShortcut("Ctrl+D")
+        act_dash.triggered.connect(self._toggle_dashboard)
+        tm.addAction(act_dash)
+
+        self._act_mock = QAction("▶  Start Mock Engine", self)
+        self._act_mock.triggered.connect(self._toggle_mock)
+        tm.addAction(self._act_mock)
+
+        tm.addSeparator()
+
         # Start a 2-second timer to keep the Tools menu label fresh
         # even when no ROM is loaded and no live data is flowing.
         self._kwp_poll_timer = QTimer(self)
@@ -3189,6 +3200,18 @@ class MainWindow(QMainWindow):
             self._scalars_tab.update_rom(bytes(built))
         if self._hardware_tab:
             self._hardware_tab.update_rom(bytes(built))
+
+    # ── Dashboard ─────────────────────────────────────────────────────────────
+
+    def _toggle_dashboard(self):
+        """Open or close the live ECU dashboard window."""
+        from hachirom.kwp import DashboardWindow
+        if not hasattr(self, '_dashboard') or self._dashboard is None:
+            self._dashboard = DashboardWindow(self._kwp_monitor, parent=self)
+        if self._dashboard.is_visible():
+            self._dashboard.hide()
+        else:
+            self._dashboard.show()
 
     # ── KWPBridge live overlay handlers ──────────────────────────────────────
 
