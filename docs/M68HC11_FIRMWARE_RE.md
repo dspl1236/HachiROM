@@ -877,3 +877,97 @@ scalar that the trim subroutine reads is architecture-agnostic.
 | Trim subroutine location | ❌ Unknown |
 | Safe block address | ✓ `$9100–$91FC` (253B, clean) |
 | HachiROM safe block update needed | ❌ Needs code change |
+
+---
+
+## 266B (MMS-04B) vs 266D (MMS-05C) — Portability Assessment
+
+*Based on comparative disassembly session, March 2026*
+
+### Bottom Line
+
+**The CO pot patch findings from 266D do NOT directly port to 266B.**
+The two ECUs use different MCU configurations with different I/O maps,
+different firmware structure, and different ADC interfaces. The 266B
+requires its own RE session.
+
+However: the calibration tables (fuel map, ignition maps) overlap
+significantly, and the safe block at `$9E87` is confirmed in both.
+The HachiROM CO pot patch (gain-zeroing in the scalar block) applies
+to both at the same ROM offsets — that part works. The *correction loop*
+patch requires separate work for 266B.
+
+---
+
+### The "Two CPUs" Observation — Confirmed
+
+The intuition is correct, and it goes deeper than different firmware:
+the 266B and 266D use MCUs in **different operating modes** that present
+as architecturally different processors.
+
+**266D (MMS-05C):** MCU running in **expanded multiplexed mode**
+- Ports B and C are the external address/data bus
+- Internal I/O registers remapped to `$1000–$103F` via INIT register
+- External EPROM at `$8000–$FFFF`, external RAM at `$0100–$7FFF`
+- ADC is **external** memory-mapped hardware at `$1006`/`$1007`
+- Boot handler uses extended addressing: `STAA $1006`, `LDAA $1007`
+
+**266B (MMS-04B):** MCU running in **single-chip or internal-IO mode**
+- Internal I/O registers at native `$0000–$001F` (direct page)
+- Boot handler uses direct-page addressing: `STAA <$08`, `STAA <$0F`
+- Direct-page addresses match HD6303 internal registers exactly:
+  `$08`=TCSR1, `$0F`=OCR2, `$10`=OCR1, `$11`=OCR1L, `$14`=TCSR2,
+  `$16`=RCR, `$17`=TDR, `$1B`=RMCR
+- ADC interface not yet located — different mechanism required
+
+Physically on the ECU board there may also be a second IC (signal
+conditioning, multiplex, or I/O expander) that the firmware addresses
+differently on each variant. Both ECUs are Hitachi-based but the
+board-level integration differs between the 2-plug (pre-March 1990)
+and 4-plug (post-March 1990) variants.
+
+---
+
+### Comparative Data
+
+| Property | 266D (MMS-05C) | 266B (MMS-04B) |
+|----------|---------------|---------------|
+| ECU connector | 4-plug (post-3/90) | 2-plug (pre-3/90) |
+| Reset vector | `$E8B1` | `$D7BC` |
+| OC1 ISR | `$BC43` | `$E647` |
+| OC3 ISR | `$A5F2` | `$A5F1` |
+| I/O mode | Extended (`$1000+`) | Direct page (`$00-$1F`) |
+| ADC trigger | `STAA $1006` | Not yet found |
+| ADC result | `LDAA $1007` → `$16F4` | Not yet found |
+| CO pot channel code | `$28` | Not yet found |
+| CO pot result address | `$16F4` | Not yet found |
+| CO pot trim point | `$A348` | Not yet found |
+| Firmware similarity | — | 13.3% identical |
+| Fuel map (`$8000`) | Different calibration | Different calibration |
+| Ign map 1 (`$8100`) | **Identical** | **Identical** |
+| Safe block `$9E87` | ✓ Confirmed 0xFF | ✓ Confirmed 0xFF |
+| CO pot gain patch | ✓ Confirmed | ✓ Confirmed (same offset) |
+
+---
+
+### 266B RE — Next Steps
+
+The 266B RE can be bootstrapped from what we know about 266D:
+
+1. **Start from OC1 ISR at `$E647`** — this is the fuel calculation
+   equivalent. Trace for any ADC-related poll loops.
+
+2. **Look for direct-page ADC references** — since 266B uses DP mode,
+   the ADC may be at a direct-page address (`$20`–`$7F` range) rather
+   than extended `$1006`. The boot handler initialises direct-page
+   registers `$08`–`$1B` which map to HD6303 timer/serial; the ADC
+   may be at `$40`–`$7F` (as seen in 266D's peripheral activity in
+   the `$40`–`$4F` range).
+
+3. **OC3 ISR at `$A5F1` (one byte before 266D's `$A5F2`)** — this
+   near-identical address is interesting. The OC3 function is likely
+   the same role (ADC scan) with different implementation. Worth tracing.
+
+4. **The safe block and gain-zero patch locations are identical** —
+   so HachiROM's existing 266B support for CO pot patching is correct.
+   Only the correction loop patch requires new RE work.
