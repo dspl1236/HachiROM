@@ -788,3 +788,92 @@ BYTES   $9E87   66  SAFE_BLOCK_DATA
 | Teensy sensor table | ✓ Implemented |
 | Correction loop — Option A | ❌ Pending `$1032` circuit understanding |
 | HD6303 datasheet — obtain and cross-reference | ❌ **Priority action** |
+
+---
+
+## 266B (MMS-04B) Compatibility Assessment
+
+*Comparison against 266D findings — March 2026*
+
+### 266B vs 266D — What's the Same
+
+- Single Hitachi MCU per ECU (same CPU family, same instruction set)
+- External memory-mapped ADC (neither ECU uses the M68HC11 internal ADC)
+- Lower/upper 64KB EPROM split — ISR code in lower half, firmware in upper
+- OC5 ISR at identical address `$1989` — timer ISR is the same
+- Same calibration table structure: fuel map at `$0000` in lower half,
+  ignition maps following
+
+### 266B vs 266D — What's Different
+
+**86.7% of code bytes differ** — these are substantially different firmware
+versions, not minor revisions.
+
+| Property | 266D (MMS-05C, 4-plug) | 266B (MMS-04B, 2-plug) |
+|----------|------------------------|------------------------|
+| Reset vector | `$E8B1` | `$D7BC` |
+| ADC interface | Byte writes to `$1006`/`$1007` | STX (16-bit) to port registers |
+| CO pot channel | Channel 8 (`$28`), result `$16F4` | Unknown — needs RE |
+| Safe block `$9E87` | All `0xFF` ✓ | All `0x80` (stoich table) ✗ |
+| Fuel map base | `$0000` | `$0000` (same) |
+| Calibration layout | Compact lower half | Spread across `$6B00–$7FFF` |
+
+### The Dual-CPU Impression
+
+The 266B's ADC interface uses `STX` (16-bit store) to write to port
+registers `$1006:$1007`, `$1000:$1001` (PORTA/PORTB), and `$1002`
+(PORTC) in rapid succession. This pattern strongly suggests a **serial
+or bit-bang multiplexed ADC** connected to the parallel I/O ports — the
+firmware is clocking data out over the ports rather than polling a
+simple status register. This would explain the apparent complexity.
+
+The lower/upper EPROM half split amplifies this — when you see ISR code
+at `$1124` (lower half) executing completely independently from the main
+firmware at `$8000+` (upper half), it genuinely looks like two separate
+programs. It is one CPU, but with the ISR code and calibration tables in
+the lower 32KB and the main firmware in the upper 32KB.
+
+### Safe Block in 266B
+
+**The `$9E87` block used by HachiROM for 266D is NOT safe for 266B.**
+It contains a 67-byte table of `0x80` values — the stoich AFR reference
+used in the fuel calculation.
+
+**Clean candidates in 266B:**
+
+| Block | Size | Notes |
+|-------|------|-------|
+| `$9100–$91FC` | 253B | All `0xFF`, zero code references ✓ |
+| `$FD82–$FFDF` | 606B | All `0xFF`, zero code references ✓ |
+| `$EA7E–$EFFF` | 1410B | All `0xFF`, but 2 code references ⚠ |
+
+`$9100` is the recommended safe block for 266B — it's large enough for
+the sensor table (67 bytes needed), has no code references, and is
+well-positioned in the ROM layout.
+
+### CO Pot Patch Portability
+
+The CO pot patch concept **is portable to 266B**, but requires a separate
+RE session:
+
+1. The 266B ADC interface (port-based serial multiplexer) needs tracing
+   to identify which port sequence selects the CO pot channel
+2. The CO pot result RAM address needs identification (not `$16F4`)
+3. The trim subroutine location needs finding (not `$0024`)
+4. A new safe block address (`$9100`) must be used for the Teensy table
+
+The **Teensy bus intercept** (Option B) may actually be simpler for 266B
+than a firmware patch — because the port-based ADC is more complex to
+patch than the 266D's simple status register poll. Intercepting a ROM
+scalar that the trim subroutine reads is architecture-agnostic.
+
+### Status — 266B
+
+| Task | Status |
+|------|--------|
+| ADC interface type identified | ✓ Port-based serial multiplexer |
+| CO pot channel — specific sequence | ❌ Needs lower-half RE |
+| CO pot result RAM address | ❌ Unknown |
+| Trim subroutine location | ❌ Unknown |
+| Safe block address | ✓ `$9100–$91FC` (253B, clean) |
+| HachiROM safe block update needed | ❌ Needs code change |
