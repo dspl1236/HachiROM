@@ -90,8 +90,14 @@ def apply_checksum(data: bytes, variant: ROMVariant) -> bytearray:
     Fix checksum: redistribute bytes in correction region so
     sum(32KB ROM) == target. Uses same distribute-one-at-a-time algorithm
     as 034 Motorsport tool. Returns corrected 32KB bytearray.
+
+    If the variant has no checksum definition (checksum={}), returns the
+    ROM unchanged — MMS-200 and MMS-300 variants do not have a known
+    checksum correction region.
     """
-    cs     = variant.checksum
+    cs = variant.checksum
+    if not cs:
+        return bytearray(data[:32768])
     target = cs["target"]
     cf     = cs["cs_from"]
     ct     = cs["cs_to"]
