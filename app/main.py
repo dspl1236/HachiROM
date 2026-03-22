@@ -2974,10 +2974,6 @@ class MainWindow(QMainWindow):
         act_dash.triggered.connect(self._toggle_dashboard)
         tm.addAction(act_dash)
 
-        self._act_mock = QAction("▶  Start Mock Engine", self)
-        self._act_mock.triggered.connect(self._toggle_mock)
-        tm.addAction(self._act_mock)
-
         tm.addSeparator()
 
         # Start a 2-second timer to keep the Tools menu label fresh
