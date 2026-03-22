@@ -269,7 +269,6 @@ class TestChecksum:
     def test_checksum_params_all_variants(self):
         for key in ['266D', '266B', 'AAH']:
             p = CHECKSUM_PARAMS[key]
-            assert 'target'  in p
             assert 'cs_from' in p
             assert 'cs_to'   in p
             assert p['cs_to'] > p['cs_from']
@@ -285,12 +284,28 @@ class TestChecksum:
         assert verify_checksum(bytes(patched), ROM_266D)
 
     def test_unpatched_fails_verify(self):
-        rom = make_266d_rom()
-        # Random bytes won't have correct checksum
+        # ROM with sum not ≡ 0 mod 256 should fail
+        rom = bytearray([103] * 0x8000)
+        rom[0] = 1  # make sum odd
         assert not verify_checksum(bytes(rom), ROM_266D)
 
+    def test_verify_mod256_zero(self):
+        """Any ROM whose byte sum ≡ 0 (mod 256) should pass."""
+        rom = bytearray([0] * 0x8000)
+        assert verify_checksum(bytes(rom), ROM_266D)
+
+    def test_verify_real_roms(self):
+        """All bundled ROMs should pass checksum (except MMS-300)."""
+        from pathlib import Path
+        roms_dir = Path(__file__).parent.parent / "roms"
+        for f in sorted(roms_dir.glob("*.bin")):
+            data = f.read_bytes()[:0x8000]
+            s = sum(data)
+            if "MMS300" in f.name:
+                continue  # MMS-300 has no known checksum
+            assert s % 256 == 0, f"{f.name}: sum={s}, mod256={s%256}"
+
     def test_verify_all_variants(self):
-        # Need realistic fill so checksum target is achievable
         for variant, fill_rom in [
             (ROM_266D, make_266d_rom_checksummable()),
             (ROM_266B, make_266b_rom(fill=105)),
@@ -299,6 +314,23 @@ class TestChecksum:
             patched = apply_checksum(bytes(fill_rom), variant)
             assert verify_checksum(bytes(patched), variant), \
                 f"{variant.name} apply+verify failed"
+
+    def test_apply_checksum_corrects_delta(self):
+        """Mutate a ROM and verify apply_checksum restores mod256=0."""
+        rom = make_266d_rom_checksummable()
+        rom = bytearray(apply_checksum(bytes(rom), ROM_266D))
+        assert sum(rom) % 256 == 0
+        # Now change a byte
+        rom[0x0100] = (rom[0x0100] + 37) & 0xFF
+        assert sum(rom) % 256 != 0
+        fixed = apply_checksum(bytes(rom), ROM_266D)
+        assert sum(fixed) % 256 == 0
+
+    def test_no_checksum_variant_passthrough(self):
+        """Variants with no checksum (MMS-200/300) always pass verify."""
+        from hachirom.roms import ROM_MMS200
+        rom = bytearray([0x42] * 0x8000)
+        assert verify_checksum(bytes(rom), ROM_MMS200)
 
 
 # ── Map read/write ────────────────────────────────────────────────────────────
@@ -460,7 +492,15 @@ class TestCoPotPatch:
     def test_detect_co_pot_on_blank_rom(self):
         rom    = make_266d_rom()
         result = detect_co_pot_patch(bytes(rom))
-        assert result is not None
+        assert result in ("stock", "unknown")
+
+    def test_detect_stock_on_real_rom(self):
+        """OEM stock ROM should detect as 'stock'."""
+        from pathlib import Path
+        rom_path = Path(__file__).parent.parent / "roms" / "893906266D_MMS05C_stock.bin"
+        if rom_path.exists():
+            data = rom_path.read_bytes()[:0x8000]
+            assert detect_co_pot_patch(data) == "stock"
 
     def test_apply_co_pot_patch_returns_bytes(self):
         rom    = make_266d_rom()
@@ -472,6 +512,60 @@ class TestCoPotPatch:
         rom        = make_266d_rom()
         patched    = apply_co_pot_patch(bytes(rom))
         assert bytes(patched) != bytes(rom)
+
+    def test_co_pot_patch_correct_addresses(self):
+        """Patch should change exactly bytes at 0x2349-0x234A."""
+        rom     = make_266d_rom()
+        patched = apply_co_pot_patch(bytes(rom))
+        diffs = [i for i in range(len(rom)) if rom[i] != patched[i]]
+        assert diffs == [0x2349, 0x234A], f"Unexpected diff addresses: {[hex(a) for a in diffs]}"
+
+    def test_co_pot_patch_values(self):
+        """Patched bytes should be LDAA $149D operand."""
+        rom     = make_266d_rom()
+        patched = apply_co_pot_patch(bytes(rom))
+        assert patched[0x2349] == 0x14
+        assert patched[0x234A] == 0x9D
+
+    def test_co_pot_detect_after_apply(self):
+        rom     = make_266d_rom()
+        # Set stock bytes first so detect works
+        rom = bytearray(rom)
+        rom[0x2349] = 0x16
+        rom[0x234A] = 0xF4
+        assert detect_co_pot_patch(bytes(rom)) == "stock"
+        patched = apply_co_pot_patch(bytes(rom))
+        assert detect_co_pot_patch(bytes(patched)) == "patched"
+
+    def test_co_pot_restore(self):
+        rom = bytearray(make_266d_rom())
+        rom[0x2349] = 0x16
+        rom[0x234A] = 0xF4
+        patched  = apply_co_pot_patch(bytes(rom), disable=True)
+        restored = apply_co_pot_patch(bytes(patched), disable=False)
+        assert restored[0x2349] == 0x16
+        assert restored[0x234A] == 0xF4
+
+    def test_co_pot_with_checksum(self):
+        """CO pot patch + checksum correction should produce valid ROM."""
+        from pathlib import Path
+        rom_path = Path(__file__).parent.parent / "roms" / "893906266D_MMS05C_stock.bin"
+        if not rom_path.exists():
+            rom = bytearray(make_266d_rom())
+            rom[0x2349] = 0x16
+            rom[0x234A] = 0xF4
+            # Ensure sum ≡ 0 mod 256
+            remainder = sum(rom) % 256
+            rom[0x1600] = (rom[0x1600] - remainder) & 0xFF
+            data = bytes(rom)
+        else:
+            data = rom_path.read_bytes()[:0x8000]
+
+        assert sum(data) % 256 == 0, "Input ROM checksum bad"
+        patched = apply_co_pot_patch(data, disable=True)
+        fixed   = apply_checksum(patched, ROM_266D)
+        assert sum(fixed) % 256 == 0, "Checksum not corrected after CO pot patch"
+        assert detect_co_pot_patch(bytes(fixed)) == "patched"
 
 
 # ── Compare / diff ────────────────────────────────────────────────────────────

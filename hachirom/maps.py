@@ -80,16 +80,26 @@ def compute_sum(data: bytes) -> int:
 
 
 def verify_checksum(data: bytes, variant: ROMVariant) -> bool:
-    """Return True if this ROM passes the checksum for its variant."""
+    """Return True if this ROM passes the checksum for its variant.
+
+    The ECU computes: sum of all 32,768 bytes mod 256.  Must equal 0.
+    Confirmed by testing all known-good ROMs (OEM + 034 stock + RIPChip):
+    every working ROM has byte_sum ≡ 0 (mod 256), regardless of absolute sum.
+    """
     cs = variant.checksum
-    return compute_sum(data) == cs.get("target", -1)
+    if not cs:
+        return True   # no checksum defined (MMS-200, MMS-300)
+    return compute_sum(data) % 256 == 0
 
 
 def apply_checksum(data: bytes, variant: ROMVariant) -> bytearray:
     """
-    Fix checksum: redistribute bytes in correction region so
-    sum(32KB ROM) == target. Uses same distribute-one-at-a-time algorithm
-    as 034 Motorsport tool. Returns corrected 32KB bytearray.
+    Fix checksum: adjust byte(s) in the correction region so
+    sum(32KB ROM) ≡ 0 (mod 256).
+
+    The correction region is a block of 0xFF bytes in the OEM ROM that
+    can absorb small deltas from patches.  034 Motorsport uses the same
+    region for their more aggressive redistribution approach.
 
     If the variant has no checksum definition (checksum={}), returns the
     ROM unchanged — MMS-200 and MMS-300 variants do not have a known
@@ -98,38 +108,37 @@ def apply_checksum(data: bytes, variant: ROMVariant) -> bytearray:
     cs = variant.checksum
     if not cs:
         return bytearray(data[:32768])
-    target = cs["target"]
-    cf     = cs["cs_from"]
-    ct     = cs["cs_to"]
-    n      = ct - cf + 1
+    cf = cs["cs_from"]
+    ct = cs["cs_to"]
 
-    rom   = bytearray(data[:32768])
-    delta = sum(rom) - target
-    if delta == 0:
+    rom = bytearray(data[:32768])
+    remainder = sum(rom) % 256
+    if remainder == 0:
         return rom
 
-    sign = 1 if delta > 0 else -1
-    remaining = abs(delta)
-    passes = 0
-    while remaining > 0:
-        passes += 1
-        if passes > 256:
+    # Two equivalent ways to correct: subtract `remainder` or add `256 - remainder`.
+    # Pick whichever is feasible given the current byte value at cf.
+    # Spread across multiple bytes if one byte can't absorb the full delta.
+    needed = remainder  # need to subtract this much total
+    for i in range(cf, ct + 1):
+        if needed == 0:
             break
-        absorbed = 0
-        for i in range(n):
-            if remaining == 0:
+        can_absorb = min(rom[i], needed)
+        rom[i] -= can_absorb
+        needed -= can_absorb
+
+    if needed > 0:
+        # Couldn't subtract enough — add (256 - remainder) instead
+        rom = bytearray(data[:32768])
+        needed = 256 - remainder  # need to add this much total
+        for i in range(cf, ct + 1):
+            if needed == 0:
                 break
-            b = rom[cf + i]
-            if sign == 1 and b > 0:
-                rom[cf + i] -= 1
-                absorbed += 1
-                remaining -= 1
-            elif sign == -1 and b < 255:
-                rom[cf + i] += 1
-                absorbed += 1
-                remaining -= 1
-        if absorbed == 0:
-            break
+            can_absorb = min(255 - rom[i], needed)
+            rom[i] += can_absorb
+            needed -= can_absorb
+
+    assert sum(rom) % 256 == 0, "Checksum correction failed"
     return rom
 
 
@@ -246,7 +255,7 @@ def apply_maf_patch(data: bytes, profile_key: str) -> bytes:
 
 
 # ---------------------------------------------------------------------------
-# CO pot (pin 4) disable patch — 266D only
+# CO Pot Disable — 266D firmware patch (confirmed on-car March 2026)
 # ---------------------------------------------------------------------------
 #
 # Background
@@ -257,84 +266,68 @@ def apply_maf_patch(data: bytes, profile_key: str) -> bytes:
 # source voltage on this pin.
 #
 # When fitting a replacement sensor with no CO pot (e.g. Bosch 1.8T) pin 4
-# is left floating.  The ECU sees this as out-of-range and stores fault 00521
-# "CO-Poti Unterbrechung oder Kurzschluss" (CO pot open/short circuit).
+# is left floating.  The ECU reads pin 4 via ADC channel 8 (select code $28)
+# and stores the result to RAM $16F4.  A floating pin produces a random ADC
+# value → erratic fuel trim.  Fault 00521 "CO-Poti Unterbrechung" may also set.
 #
-# This patch makes the ECU accept any voltage (including floating/0V) on
-# pin 4 without faulting, and zeros the trim gain so pin 4 has no effect on
-# fuelling.
+# Firmware trace (confirmed from M68HC11 disassembly)
+# ---------------------------------------------------
+# The fuel trim is applied at CPU $A348 (file offset 0x2348):
 #
-# Bytes found by diffing two clean stock ROMs (266D stock .034 vs 266B stock
-# .034, both unscrambled) — confirmed identical in both variants (fixed
-# scalars, not calibration data):
+#   $A348  B6 16 F4   LDAA $16F4    ; load CO pot ADC result
+#   $A34B  B0 14 9D   SUBA $149D    ; delta = CO_pot - ch0_reading
+#   $A34E  24 01      BHS  +1       ; clamp underflow to zero
+#   $A350  4F         CLRA
 #
-#   0x0762 = 10  (0x0A) — CO pot ADC low fault threshold  (~0.20V)
-#   0x0763 = 238 (0xEE) — CO pot ADC high fault threshold (~4.67V)
-#   0x0777 = 128 (0x80) — CO pot neutral target (midpoint, 2.5V)
-#   0x0778 = 50  (0x32) — CO pot trim authority window (±50 ADC counts)
-#   0x0779 = 4   (0x04) — CO pot trim gain per ADC count
-#
-# Fault table entry (266D only — 266B has different fault layout):
-#   0x0AC9-0x0ACB = 02 09 1E  — fault 0x0209 (521 decimal), condition 0x1E
+# The delta feeds a trim subroutine that adjusts base fuel pulsewidth.
 #
 # Patch strategy
 # --------------
-# Three bytes are modified:
-#   0x0762 → 0x00  widen low  threshold to 0   (0.00V) — no low-side fault
-#   0x0763 → 0xFF  widen high threshold to 255 (5.00V) — no high-side fault
-#   0x0779 → 0x00  zero the trim gain           — pin 4 has zero effect on fuelling
+# Redirect the LDAA to load ch0 (the same value that's subtracted next):
+#   $A348  B6 14 9D   LDAA $149D    ; load ch0 instead of CO pot
+# Result: SUBA $149D computes (ch0 - ch0) = 0 → zero trim correction always.
+# The ADC still reads pin 4 but the result is completely ignored in the fuel
+# path.  Pin 4 can float, be disconnected, or be connected — doesn't matter.
 #
-# Result: fault 00521 is never triggered regardless of pin 4 voltage, and
-# the CO pot trim is permanently at neutral (0x0777 = 128 unchanged).
-# The neutral target byte (0x0777) and window byte (0x0778) are left as-is —
-# they are harmless with gain = 0.
+# File offsets (32KB ROM, CPU base $8000):
+#   0x2349: 0x16 → 0x14  (LDAA operand high byte)
+#   0x234A: 0xF4 → 0x9D  (LDAA operand low byte)
 #
-# The fault table entry at 0x0AC9 is NOT modified — the fault can still be
-# manually read via VAG-COM if triggered by something else, but with thresholds
-# 0–255 it will never be triggered by a floating or resistor-held pin 4.
+# IMPORTANT: apply_checksum() MUST be called after this patch.
+# The ECU validates sum(32KB) ≡ 0 (mod 256) at startup and enters a fault
+# mode if the check fails.  This was confirmed on-car: patched ROMs without
+# checksum correction cause engine to die under throttle application.
 #
-# Safe for: any 266D ROM with a 1.8T or other no-CO-pot MAF sensor fitted.
-# NOT needed when fitting the 7A Hitachi sensor into the AAH V6 housing
-# (CO pot is retained in that conversion — pin 4 wiring unchanged).
+# CORRECTION (March 2026): Previous patch targeted calibration bytes at
+# 0x0762, 0x0763, 0x0779 — these were WRONG.  Those addresses are unrelated
+# 16-bit calibration constants in the fuel/ignition path:
+#   0x0762-0x0763: loaded as 16-bit word by LDD $8762 (4 firmware references)
+#   0x0779: subtraction operand in SUBA $8779 (fuel calculation chain)
+# Modifying them corrupts fuel delivery regardless of checksum state.
 # ---------------------------------------------------------------------------
 
-CO_POT_LOW_THRESHOLD_ADDR   = 0x0762   # ADC low  fault threshold (stock = 10)
-CO_POT_HIGH_THRESHOLD_ADDR  = 0x0763   # ADC high fault threshold (stock = 238)
-CO_POT_NEUTRAL_ADDR         = 0x0777   # neutral target ADC count  (stock = 128)
-CO_POT_WINDOW_ADDR          = 0x0778   # trim authority window      (stock = 50)
-CO_POT_GAIN_ADDR            = 0x0779   # trim gain per ADC count    (stock = 4)
-
-CO_POT_PATCH_ADDRS = {
-    CO_POT_LOW_THRESHOLD_ADDR:  0x00,   # widen: accept 0V
-    CO_POT_HIGH_THRESHOLD_ADDR: 0xFF,   # widen: accept 5V
-    CO_POT_GAIN_ADDR:           0x00,   # zero gain: trim has no effect
-}
-
-CO_POT_STOCK_ADDRS = {
-    CO_POT_LOW_THRESHOLD_ADDR:  0x0A,   # restore: 10 (~0.20V low threshold)
-    CO_POT_HIGH_THRESHOLD_ADDR: 0xEE,   # restore: 238 (~4.67V high threshold)
-    CO_POT_GAIN_ADDR:           0x04,   # restore: gain = 4
-}
+CO_POT_PATCH_ADDR    = 0x2349   # file offset of LDAA operand high byte
+CO_POT_PATCH_BYTES   = bytes([0x14, 0x9D])   # LDAA $149D (load ch0)
+CO_POT_STOCK_BYTES   = bytes([0x16, 0xF4])   # LDAA $16F4 (load CO pot ADC)
 
 
 def detect_co_pot_patch(data: bytes) -> str:
     """
-    Inspect the CO pot scalar bytes in a 266D ROM and return the patch state.
+    Inspect the CO pot instruction at $A348 and return the patch state.
 
     Returns:
-        ``"stock"``    — all three bytes at stock values (CO pot active)
-        ``"patched"``  — all three bytes at patched values (CO pot disabled)
-        ``"unknown"``  — bytes don't match either known state (manual edit?)
+        ``"stock"``    — instruction is LDAA $16F4 (CO pot active)
+        ``"patched"``  — instruction is LDAA $149D (CO pot disabled)
+        ``"unknown"``  — bytes don't match either known state
     """
-    if len(data) < CO_POT_GAIN_ADDR + 1:
+    addr = CO_POT_PATCH_ADDR
+    if len(data) < addr + 2:
         return "unknown"
 
-    is_patched = all(data[addr] == val for addr, val in CO_POT_PATCH_ADDRS.items())
-    is_stock   = all(data[addr] == val for addr, val in CO_POT_STOCK_ADDRS.items())
-
-    if is_patched:
+    actual = data[addr:addr + 2]
+    if actual == CO_POT_PATCH_BYTES:
         return "patched"
-    if is_stock:
+    if actual == CO_POT_STOCK_BYTES:
         return "stock"
     return "unknown"
 
@@ -346,18 +339,21 @@ def apply_co_pot_patch(data: bytes, disable: bool = True) -> bytes:
     Parameters
     ----------
     data    : raw 32 768-byte 266D ROM
-    disable : True  → write patch values (disable CO pot, suppress fault 00521)
-              False → restore stock values
+    disable : True  → redirect LDAA to ch0 (CO pot ignored, zero trim)
+              False → restore LDAA $16F4 (CO pot active)
+
+    NOTE: caller must run apply_checksum() after this to fix the byte sum.
 
     Raises ``ValueError`` if *data* is too short.
     """
-    if len(data) < CO_POT_GAIN_ADDR + 1:
+    addr = CO_POT_PATCH_ADDR
+    if len(data) < addr + 2:
         raise ValueError("ROM data too short for CO pot patch")
 
-    patch_map = CO_POT_PATCH_ADDRS if disable else CO_POT_STOCK_ADDRS
+    target = CO_POT_PATCH_BYTES if disable else CO_POT_STOCK_BYTES
     rom = bytearray(data)
-    for addr, val in patch_map.items():
-        rom[addr] = val
+    rom[addr]     = target[0]
+    rom[addr + 1] = target[1]
     return bytes(rom)
 
 
@@ -832,7 +828,7 @@ def apply_pin4_patch(data: bytes, sensor_type: int, subtype_key: str = '') -> by
         raise ValueError("ROM too short for pin 4 patch")
 
     # Require CO pot patch to be applied first
-    if data[0x0779] != 0x00:
+    if detect_co_pot_patch(data) != "patched":
         raise ValueError(
             "CO pot patch must be applied before writing pin 4 sensor table. "
             "Apply CO pot patch first (Hardware tab → CO Pot).")

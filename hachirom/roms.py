@@ -313,6 +313,10 @@ def timing_encode(deg) -> int:
 # ---------------------------------------------------------------------------
 
 CHECKSUM_PARAMS = {
+    # The ECU validates: sum(32KB) ≡ 0 (mod 256).  Confirmed on-car.
+    # "target" is the byte sum of the known 034-stock ROM (kept for reference only).
+    # "cs_from" is the first byte of the correction region (all 0xFF in OEM ROMs).
+    # apply_checksum() adjusts byte(s) starting at cs_from to restore mod-256 = 0.
     "266D": {"target": 3_384_576, "cs_from": 0x1600, "cs_to": 0x17FF},
     "266B": {"target": 3_894_528, "cs_from": 0x1400, "cs_to": 0x1FFF},
     "AAH":  {"target": 3_684_096, "cs_from": 0x6700, "cs_to": 0x7D1E},

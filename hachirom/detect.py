@@ -126,17 +126,15 @@ def _normalise(data: bytes, notes: list[str]) -> bytes:
 def _quick_score(half: bytes) -> int:
     """
     Fast structural score for choosing between two 32KB halves.
-    Uses only the most reliable markers (reset vector + byte sum proximity).
+    Uses only the most reliable markers (reset vector + checksum mod 256).
     """
     score = 0
     vec = (half[0x7FFE], half[0x7FFF])
     if vec in _RESET_VEC_MAP:
         score += 50
-    for v in ALL_VARIANTS:
-        target = v.checksum.get("target", 0)
-        if abs(sum(half) - target) < 20000:
-            score += 20
-            break
+    # ECU checksum: sum(32KB) ≡ 0 (mod 256)
+    if sum(half) % 256 == 0:
+        score += 20
     ff_pct = sum(1 for b in half if b == 0xFF) / 32768
     if ff_pct < 0.5:      # real ROM data
         score += 10
@@ -161,15 +159,19 @@ def _score_variant(rom32: bytes, variant: ROMVariant) -> int:
     if variant.reset_vector and tuple(variant.reset_vector) == vec:
         score += 50
 
-    # Byte sum vs checksum target
+    # Byte sum checksum: ECU requires sum ≡ 0 (mod 256).
+    # Target proximity helps discriminate variants (different variants have
+    # very different absolute sums even though all are ≡ 0 mod 256).
     cs_target = variant.checksum.get("target", 0)
     cs_actual = sum(rom32)
-    if cs_actual == cs_target:
-        score += 35
-    elif abs(cs_actual - cs_target) < 2000:
-        score += 20
-    elif abs(cs_actual - cs_target) < 20000:
-        score += 5
+    if cs_actual % 256 == 0:
+        score += 10   # valid checksum (any variant)
+    if cs_target and cs_actual == cs_target:
+        score += 25   # exact match = almost certainly this variant's 034 stock
+    elif cs_target and abs(cs_actual - cs_target) < 2000:
+        score += 15   # close = likely this variant, lightly edited
+    elif cs_target and abs(cs_actual - cs_target) < 200000:
+        score += 5    # same ballpark
 
     # Variant-specific structural markers
     if vk == "AAH":

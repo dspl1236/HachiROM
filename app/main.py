@@ -537,9 +537,9 @@ class CoPotPatchDialog(QDialog):
         layout.addWidget(QLabel(
             "<span style='color:#aaa; font-size:11px;'>"
             "<b>Patch bytes:</b>  "
-            "0x0762 (low threshold) → 0x00 &nbsp;·&nbsp; "
-            "0x0763 (high threshold) → 0xFF &nbsp;·&nbsp; "
-            "0x0779 (gain) → 0x00"
+            "0x2349 (LDAA operand) → 0x14 &nbsp;·&nbsp; "
+            "0x234A (LDAA operand) → 0x9D &nbsp; "
+            "(redirects CO pot read to ch0 — zero trim)"
             "</span>",
             textFormat=Qt.RichText))
 
@@ -1916,7 +1916,7 @@ class HardwareTab(QWidget):
             return
 
         # Check CO pot patch first
-        if self._rom[0x0779] != 0x00:
+        if hr.detect_co_pot_patch(self._rom) != "patched":
             QMessageBox.warning(self, "Pin 4",
                 "CO pot patch must be applied before writing a pin 4 sensor table.\n\n"
                 "Apply CO Pot patch first (CO POT section above), then retry.")
@@ -2643,24 +2643,13 @@ class ScalarsTab(QWidget):
          "Global injector pulse multiplier. Stock = 100. "
          "new = 100 × (stock_cc / new_cc). 266D only.",
          True),
-        ("CO Pot Low Thresh",  0x0762, "raw",    lambda r: r,
-         "CO pot ADC fault threshold — low side. "
-         "Patched to 0x00 (0V) to disable CO pot fault. Stock = 0x0A (10).",
+        ("CO Pot Patch [hi]",  0x2349, "raw",    lambda r: r,
+         "CO pot patch byte 1 — LDAA operand high byte. "
+         "Stock = 0x16 (LDAA $16F4 = CO pot). Patched = 0x14 (LDAA $149D = ch0).",
          True),
-        ("CO Pot High Thresh", 0x0763, "raw",    lambda r: r,
-         "CO pot ADC fault threshold — high side. "
-         "Patched to 0xFF (5V) to disable CO pot fault. Stock = 0xEE (238).",
-         True),
-        ("CO Pot Neutral",     0x0777, "raw",    lambda r: r,
-         "CO pot neutral (centre) target. 128 = mid-scale = no trim. "
-         "Unchanged by CO pot patch — harmless with gain = 0.",
-         True),
-        ("CO Pot Window",      0x0778, "raw",    lambda r: r,
-         "CO pot authority window ±N ADC counts around neutral. Stock = 50.",
-         True),
-        ("CO Pot Gain",        0x0779, "raw",    lambda r: r,
-         "CO pot trim gain per ADC count. "
-         "Patched to 0x00 to zero the trim effect. Stock = 0x04 (4).",
+        ("CO Pot Patch [lo]",  0x234A, "raw",    lambda r: r,
+         "CO pot patch byte 2 — LDAA operand low byte. "
+         "Stock = 0xF4. Patched = 0x9D.",
          True),
         ("MAF Axis [0]",       0x05D0, "raw",    lambda r: r,
          "First cell of MAF voltage→load axis (fuel map). "
@@ -3561,16 +3550,15 @@ class MainWindow(QMainWindow):
         self._load_rom(self.current_path)
         if disable:
             msg = ("CO pot trim DISABLED.\n\n"
-                   "  0x0762 → 0x00  (low threshold → 0 V)\n"
-                   "  0x0763 → 0xFF  (high threshold → 5 V)\n"
-                   "  0x0779 → 0x00  (trim gain zeroed)\n\n"
-                   "Pin 4 can be left open. Fault 00521 will not fire.")
+                   "  LDAA $16F4 → LDAA $149D  at CPU $A348\n"
+                   "  (file offsets 0x2349–0x234A)\n\n"
+                   "CO pot ADC still reads but value is ignored.\n"
+                   "Pin 4 can be left open — zero fuel trim applied.\n"
+                   "Checksum will be corrected on save.")
         else:
             msg = ("CO pot trim RESTORED to stock.\n\n"
-                   "  0x0762 → 0x0A  (low threshold ~0.20 V)\n"
-                   "  0x0763 → 0xEE  (high threshold ~4.67 V)\n"
-                   "  0x0779 → 0x04  (trim gain = 4)\n\n"
-                   "⚠  CO pot must be wired on pin 4 or fault 00521 will return.")
+                   "  LDAA $149D → LDAA $16F4  at CPU $A348\n\n"
+                   "⚠  CO pot must be wired on pin 4 or fault 00521 may fire.")
         QMessageBox.information(self, "CO Pot Patch Applied", msg)
 
     # ── MAF patch ─────────────────────────────────────────────────────────────
