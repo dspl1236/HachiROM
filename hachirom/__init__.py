@@ -35,7 +35,8 @@ from .maps   import (read_map, read_map_decoded, write_map, write_map_encoded,
                      PIN4_TABLE_BASE, PIN4_TYPE_NONE, PIN4_TYPE_WIDEBAND,
                      PIN4_TYPE_MAP, PIN4_TYPE_IAT, PIN4_TYPE_RAW,
                      detect_pin4_patch, apply_pin4_patch,
-                     CO_POT_PATCH_ADDR, CO_POT_PATCH_BYTES, CO_POT_STOCK_BYTES)
+                     CO_POT_PATCH_ADDR, CO_POT_PATCH_BYTES, CO_POT_STOCK_BYTES,
+                     CO_POT_VARIANTS)
 from .roms   import (ROMVariant, MapDef, ALL_VARIANTS,
                      ROM_266D, ROM_266B, ROM_AAH,
                      unscramble_034, unscramble_byte,
@@ -66,7 +67,7 @@ __all__ = [
     "PIN4_TABLE_BASE", "PIN4_TYPE_NONE", "PIN4_TYPE_WIDEBAND",
     "PIN4_TYPE_MAP", "PIN4_TYPE_IAT", "PIN4_TYPE_RAW",
     "detect_pin4_patch", "apply_pin4_patch",
-    "CO_POT_PATCH_ADDR", "CO_POT_PATCH_BYTES", "CO_POT_STOCK_BYTES",
+    "CO_POT_PATCH_ADDR", "CO_POT_PATCH_BYTES", "CO_POT_STOCK_BYTES", "CO_POT_VARIANTS",
     "ROMVariant", "MapDef", "ALL_VARIANTS",
     "ROM_266D", "ROM_266B", "ROM_AAH",
     "unscramble_034", "unscramble_byte",

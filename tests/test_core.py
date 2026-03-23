@@ -568,6 +568,58 @@ class TestCoPotPatch:
         assert detect_co_pot_patch(bytes(fixed)) == "patched"
 
 
+class TestCoPotPatch266B:
+    """266B (MMS-04B) CO pot patch — same pattern, different addresses."""
+
+    def _make_266b_with_copot(self):
+        rom = make_266b_rom()
+        rom = bytearray(rom)
+        rom[0x23A5] = 0x42  # stock LDAA $42F4
+        rom[0x23A6] = 0xF4
+        return rom
+
+    def test_detect_stock_on_266b(self):
+        rom = self._make_266b_with_copot()
+        assert detect_co_pot_patch(bytes(rom)) == "stock"
+
+    def test_apply_patch_266b(self):
+        rom = self._make_266b_with_copot()
+        patched = apply_co_pot_patch(bytes(rom), disable=True)
+        assert patched[0x23A5] == 0x40
+        assert patched[0x23A6] == 0x9D
+
+    def test_detect_patched_on_266b(self):
+        rom = self._make_266b_with_copot()
+        patched = apply_co_pot_patch(bytes(rom), disable=True)
+        assert detect_co_pot_patch(bytes(patched)) == "patched"
+
+    def test_restore_266b(self):
+        rom = self._make_266b_with_copot()
+        patched = apply_co_pot_patch(bytes(rom), disable=True)
+        restored = apply_co_pot_patch(bytes(patched), disable=False)
+        assert restored[0x23A5] == 0x42
+        assert restored[0x23A6] == 0xF4
+
+    def test_real_266b_rom(self):
+        """Test against actual 266B stock ROM."""
+        from pathlib import Path
+        rom_path = Path(__file__).parent.parent / "roms" / "893906266B_MMS04B_stock.bin"
+        if not rom_path.exists():
+            pytest.skip("266B ROM not available")
+        data = rom_path.read_bytes()[:0x8000]
+        assert detect_co_pot_patch(data) == "stock"
+        patched = apply_co_pot_patch(data, disable=True)
+        assert detect_co_pot_patch(bytes(patched)) == "patched"
+        fixed = apply_checksum(patched, ROM_266B)
+        assert sum(fixed) % 256 == 0
+
+    def test_266b_addresses_differ_from_266d(self):
+        """266B and 266D use different file offsets."""
+        from hachirom.maps import CO_POT_VARIANTS
+        assert CO_POT_VARIANTS["266D"]["patch_addr"] != CO_POT_VARIANTS["266B"]["patch_addr"]
+        assert CO_POT_VARIANTS["266D"]["stock_bytes"] != CO_POT_VARIANTS["266B"]["stock_bytes"]
+
+
 # ── Compare / diff ────────────────────────────────────────────────────────────
 
 class TestCompareRoms:

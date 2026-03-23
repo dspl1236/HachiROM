@@ -272,26 +272,35 @@ def apply_maf_patch(data: bytes, profile_key: str) -> bytes:
 #
 # Firmware trace (confirmed from M68HC11 disassembly)
 # ---------------------------------------------------
-# The fuel trim is applied at CPU $A348 (file offset 0x2348):
+# The fuel trim is applied at the same code pattern in both 266D and 266B:
 #
+# 266D (MMS-05C):
 #   $A348  B6 16 F4   LDAA $16F4    ; load CO pot ADC result
 #   $A34B  B0 14 9D   SUBA $149D    ; delta = CO_pot - ch0_reading
 #   $A34E  24 01      BHS  +1       ; clamp underflow to zero
 #   $A350  4F         CLRA
 #
-# The delta feeds a trim subroutine that adjusts base fuel pulsewidth.
+# 266B (MMS-04B):
+#   $A3A4  B6 42 F4   LDAA $42F4    ; load CO pot ADC result
+#   $A3A7  B0 40 9D   SUBA $409D    ; delta = CO_pot - ch0_reading
+#   $A3AA  24 01      BHS  +1       ; clamp underflow to zero
+#   $A3AC  4F         CLRA
+#
+# Same instruction sequence — identical logic, different RAM base addresses.
+# RAM mapping: 266D uses $14xx/$16xx, 266B uses $40xx/$42xx.
+# The low nibbles (F4, 9D) match across both variants.
 #
 # Patch strategy
 # --------------
 # Redirect the LDAA to load ch0 (the same value that's subtracted next):
-#   $A348  B6 14 9D   LDAA $149D    ; load ch0 instead of CO pot
-# Result: SUBA $149D computes (ch0 - ch0) = 0 → zero trim correction always.
+#   266D: LDAA $16F4 → LDAA $149D  (file 0x2349-0x234A)
+#   266B: LDAA $42F4 → LDAA $409D  (file 0x23A5-0x23A6)
+# Result: SUBA computes (ch0 - ch0) = 0 → zero trim correction always.
 # The ADC still reads pin 4 but the result is completely ignored in the fuel
 # path.  Pin 4 can float, be disconnected, or be connected — doesn't matter.
 #
-# File offsets (32KB ROM, CPU base $8000):
-#   0x2349: 0x16 → 0x14  (LDAA operand high byte)
-#   0x234A: 0xF4 → 0x9D  (LDAA operand low byte)
+# Auto-detection: the code checks which file offset has recognized bytes
+# to determine which variant is loaded.  Both use the same API.
 #
 # IMPORTANT: apply_checksum() MUST be called after this patch.
 # The ECU validates sum(32KB) ≡ 0 (mod 256) at startup and enters a fault
@@ -306,28 +315,71 @@ def apply_maf_patch(data: bytes, profile_key: str) -> bytes:
 # Modifying them corrupts fuel delivery regardless of checksum state.
 # ---------------------------------------------------------------------------
 
-CO_POT_PATCH_ADDR    = 0x2349   # file offset of LDAA operand high byte
-CO_POT_PATCH_BYTES   = bytes([0x14, 0x9D])   # LDAA $149D (load ch0)
-CO_POT_STOCK_BYTES   = bytes([0x16, 0xF4])   # LDAA $16F4 (load CO pot ADC)
+CO_POT_VARIANTS = {
+    # variant_key: (file_offset, stock_bytes, patch_bytes, description)
+    "266D": {
+        "patch_addr":   0x2349,
+        "stock_bytes":  bytes([0x16, 0xF4]),  # LDAA $16F4 (CO pot ADC)
+        "patch_bytes":  bytes([0x14, 0x9D]),  # LDAA $149D (ch0)
+        "copot_ram":    "$16F4",
+        "ch0_ram":      "$149D",
+        "cpu_addr":     "$A348",
+    },
+    "266B": {
+        "patch_addr":   0x23A5,
+        "stock_bytes":  bytes([0x42, 0xF4]),  # LDAA $42F4 (CO pot ADC)
+        "patch_bytes":  bytes([0x40, 0x9D]),  # LDAA $409D (ch0)
+        "copot_ram":    "$42F4",
+        "ch0_ram":      "$409D",
+        "cpu_addr":     "$A3A4",
+    },
+}
+
+# Legacy aliases for backward compatibility
+CO_POT_PATCH_ADDR    = CO_POT_VARIANTS["266D"]["patch_addr"]
+CO_POT_PATCH_BYTES   = CO_POT_VARIANTS["266D"]["patch_bytes"]
+CO_POT_STOCK_BYTES   = CO_POT_VARIANTS["266D"]["stock_bytes"]
+
+
+def _co_pot_variant_key(data: bytes) -> str:
+    """Determine which CO pot variant to use based on ROM content."""
+    # Check 266D location first (more common)
+    addr_d = CO_POT_VARIANTS["266D"]["patch_addr"]
+    if len(data) > addr_d + 1:
+        actual = data[addr_d:addr_d + 2]
+        if actual in (CO_POT_VARIANTS["266D"]["stock_bytes"],
+                      CO_POT_VARIANTS["266D"]["patch_bytes"]):
+            return "266D"
+    # Check 266B location
+    addr_b = CO_POT_VARIANTS["266B"]["patch_addr"]
+    if len(data) > addr_b + 1:
+        actual = data[addr_b:addr_b + 2]
+        if actual in (CO_POT_VARIANTS["266B"]["stock_bytes"],
+                      CO_POT_VARIANTS["266B"]["patch_bytes"]):
+            return "266B"
+    return "266D"  # default
 
 
 def detect_co_pot_patch(data: bytes) -> str:
     """
-    Inspect the CO pot instruction at $A348 and return the patch state.
+    Inspect the CO pot instruction and return the patch state.
+    Auto-detects 266D vs 266B from ROM content.
 
     Returns:
-        ``"stock"``    — instruction is LDAA $16F4 (CO pot active)
-        ``"patched"``  — instruction is LDAA $149D (CO pot disabled)
+        ``"stock"``    — LDAA loads CO pot ADC (active)
+        ``"patched"``  — LDAA loads ch0 (CO pot disabled)
         ``"unknown"``  — bytes don't match either known state
     """
-    addr = CO_POT_PATCH_ADDR
+    vk = _co_pot_variant_key(data)
+    v = CO_POT_VARIANTS[vk]
+    addr = v["patch_addr"]
     if len(data) < addr + 2:
         return "unknown"
 
     actual = data[addr:addr + 2]
-    if actual == CO_POT_PATCH_BYTES:
+    if actual == v["patch_bytes"]:
         return "patched"
-    if actual == CO_POT_STOCK_BYTES:
+    if actual == v["stock_bytes"]:
         return "stock"
     return "unknown"
 
@@ -335,22 +387,25 @@ def detect_co_pot_patch(data: bytes) -> str:
 def apply_co_pot_patch(data: bytes, disable: bool = True) -> bytes:
     """
     Return a new bytes object with the CO pot trim either disabled or restored.
+    Auto-detects 266D vs 266B from ROM content.
 
     Parameters
     ----------
-    data    : raw 32 768-byte 266D ROM
+    data    : raw 32 768-byte ROM (266D or 266B)
     disable : True  → redirect LDAA to ch0 (CO pot ignored, zero trim)
-              False → restore LDAA $16F4 (CO pot active)
+              False → restore LDAA to CO pot ADC (CO pot active)
 
     NOTE: caller must run apply_checksum() after this to fix the byte sum.
 
     Raises ``ValueError`` if *data* is too short.
     """
-    addr = CO_POT_PATCH_ADDR
+    vk = _co_pot_variant_key(data)
+    v = CO_POT_VARIANTS[vk]
+    addr = v["patch_addr"]
     if len(data) < addr + 2:
         raise ValueError("ROM data too short for CO pot patch")
 
-    target = CO_POT_PATCH_BYTES if disable else CO_POT_STOCK_BYTES
+    target = v["patch_bytes"] if disable else v["stock_bytes"]
     rom = bytearray(data)
     rom[addr]     = target[0]
     rom[addr + 1] = target[1]
