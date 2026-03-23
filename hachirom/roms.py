@@ -56,11 +56,29 @@ LOAD_AXIS_AAH   = [12.6,18.8,23.5,28.2,32.9,38.4,43.9,50.2,56.5,62.8,69.0,75.3,8
 # (AAH/MMS200 load axis is calculated engine load % derived from MAF signal,
 #  not a direct MAP sensor reading. The ECU computes load from MAF airflow.)
 #
-# ⚠ EXPERIMENTAL: All MAF axis patches (including stock_7a restore) involve
-# modifying fuel and timing map interpolation axes.  The 7A Hitachi profiles
-# are derived from physical ROM data and are the most reliable.  The 1.8T
-# sensor profiles are derived from published transfer function data and bore
-# area calculations — they have NOT been verified on a running engine.
+# ⚠ IMPORTANT LIMITATION: HachiROM's MAF patch is AXIS-ONLY.
+# Analysis of 034 Motorsport's "NA Big MAF" calibration file reveals that a
+# proper MAF housing swap requires recalibrating MUCH more than the axis:
+#
+#   What 034 changed for a big MAF housing swap (682 bytes total):
+#     - MAF linearization table at 0x02D0-0x034F (128 bytes) — ADC→airflow lookup
+#     - Fuel map 0x0000-0x00FF (214/256 cells rewritten)
+#     - Timing map 0x0100-0x01FF (151/256 cells rewritten)
+#     - Secondary enrichment tables 0x1006-0x10FF (176 bytes)
+#     - Enrichment scalars, RPM scaling
+#   What 034 did NOT change: MAF axis at 0x05D0/0x05E0 (kept stock!)
+#
+#   034's approach: keep axis stock, recalibrate linearization + maps.
+#   Our approach: rescale axis breakpoints, keep linearization + maps stock.
+#   Both are valid starting points but neither is complete without dyno tuning.
+#
+# The linearization table at 0x02D0-0x034F is a 16-bit interleaved lookup
+# (64 entries, 2 bytes each) that converts MAF ADC voltage to internal airflow
+# units. 034's Big MAF file scaled these by ~1.30× — consistent with the bore
+# area ratio from 50mm to a ~74mm housing.
+#
+# HachiROM's axis-only patch gets the car running with the new MAF housing
+# and is safe for initial testing, but is NOT a full recalibration.
 # Always verify fuelling with a wideband O2 sensor after applying any patch.
 #
 # The 266D/266B fuel/timing maps are indexed by MAF ADC counts (0-255 = 0-5V).
@@ -143,6 +161,12 @@ LOAD_AXIS_AAH   = [12.6,18.8,23.5,28.2,32.9,38.4,43.9,50.2,56.5,62.8,69.0,75.3,8
 MAF_AXIS_ADDR_FUEL   = 0x05D0   # fuel map MAF axis location in ROM
 MAF_AXIS_ADDR_TIMING = 0x05E0   # timing map MAF axis location (identical copy)
 MAF_AXIS_LEN         = 16       # 16 breakpoints
+
+# MAF linearization table — discovered from 034 "NA Big MAF" calibration file.
+# 64 entries × 2 bytes (16-bit interleaved), converts ADC voltage → airflow units.
+# NOT currently patched by HachiROM — documented for future use.
+MAF_LINEARIZATION_ADDR = 0x02D0  # start of linearization table
+MAF_LINEARIZATION_LEN  = 128    # 128 bytes (64 × 2-byte entries)
 
 # Sensor / housing compatibility
 # ─────────────────────────────
@@ -232,6 +256,11 @@ MAF_PROFILES: dict = {
         "hp_note":      "NA / mild boost — CO pot retained, ROM patch required",
         "co_pot":        True,
         "plug_play":     True,
+        "note":         "AXIS-ONLY patch — rescales the 16-point MAF interpolation axis. "
+                        "034 Motorsport's equivalent calibration also rewrites the linearization "
+                        "table (0x02D0-0x034F), fuel map, timing map, and enrichment tables. "
+                        "This axis patch is a valid starting point but should be verified with "
+                        "a wideband O2 sensor at WOT before sustained use.",
     },
     "aah_v6_3wire":     {
         "label":        "AAH V6 housing + AAH sensor  (74mm, 3-wire)",

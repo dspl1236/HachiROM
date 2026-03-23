@@ -91,6 +91,11 @@ Fuel and timing map data is untouched — only the axis interpolation is rescale
 ⚠ = EXPERIMENTAL — derived from King's law bore area calculations. Not verified on engine.  
 Always validate with a wideband O2 sensor before road use.
 
+**Note:** All MAF profiles are **axis-only** patches (32 bytes). Analysis of 034 Motorsport's
+"NA Big MAF" calibration shows a full MAF housing swap also requires recalibrating the
+linearization table (0x02D0), fuel map, timing map, and enrichment tables (682 bytes total).
+The axis patch gets the car running safely but is not a complete recalibration.
+
 See [`docs/MAF_SENSOR_WIRING.md`](docs/MAF_SENSOR_WIRING.md) for full wiring and conversion details.
 
 ### CO Pot Disable Patch

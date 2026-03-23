@@ -41,6 +41,12 @@ ROM patch required — apply the `aah_v6_housing` profile in HachiROM to rescale
 the MAF axis for the larger bore.  Without the ROM patch the ECU will read low
 airflow and run rich.
 
+> **Axis-only limitation:** HachiROM's MAF patch rewrites the 16-point axis
+> (32 bytes).  034 Motorsport's equivalent "NA Big MAF" calibration also
+> recalibrates the linearization table, fuel map, timing map, and enrichment
+> tables (682 bytes total).  The axis patch is a safe starting point — verify
+> fuelling with a wideband O2 sensor at WOT before sustained use.
+
 > **Housing compatibility note:**  
 > `078 133 471` (no suffix) — correct, mounting holes match  
 > `078 133 471 A` / `078 133 471 AX` — **incompatible**, mirrored holes, different sensor depth  
