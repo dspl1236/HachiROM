@@ -3,6 +3,17 @@
 **Hitachi MMS ECU ROM editor — 7A 20v and AAH 12v**  
 Standalone desktop app plus Python library.
 
+> **⚠ Work in Progress — Use at Your Own Risk**
+>
+> This tool is under active development. Features may be incomplete, map
+> addresses may be unverified, and patches may not have been tested on all
+> hardware variants. **Always read and back up your original ROM before making
+> any changes.** Read it twice, compare the files, keep both copies safe.
+>
+> If you find a bug, incorrect address, or have a ROM dump to contribute,
+> please [open an issue](https://github.com/dspl1236/HachiROM/issues).
+
+
 [![Build HachiROM](https://github.com/dspl1236/HachiROM/actions/workflows/build.yml/badge.svg)](https://github.com/dspl1236/HachiROM/actions/workflows/build.yml)
 ![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20Linux%20%7C%20Mac-blue)
 ![ROM](https://img.shields.io/badge/ROM-27C512%2064KB-yellow)
