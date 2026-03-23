@@ -165,98 +165,89 @@ pot during an annual inspection to make the car pass the CO exhaust test.
 #### What the ECU does with pin 4
 
 The ECU reads pin 4 via an 8-bit ADC (0 V = 0, 5 V = 255).  On every idle
-cycle it compares the ADC reading against a neutral target and applies a small
-fuel trim proportional to the deviation.  Five scalars in the ROM control this
-behaviour:
-
-| Address  | Name           | Stock value   | Role |
-|----------|----------------|---------------|------|
-| `0x0762` | Low threshold  | `0x0A` (10)   | ADC counts below this → fault 00521 (open circuit) |
-| `0x0763` | High threshold | `0xEE` (238)  | ADC counts above this → fault 00521 (short circuit) |
-| `0x0777` | Neutral target | `0x80` (128)  | ADC midpoint = no trim (pot centred ≈ 2.5 V) |
-| `0x0778` | Window         | `0x32` (50)   | Trim only active within ±50 counts of neutral |
-| `0x0779` | Gain           | `0x04` (4)    | Fuel trim applied per ADC count of deviation |
-
-The trim loop runs approximately:
-
-```
-deviation = adc_pin4 - neutral_target        // signed, range ±50
-if |deviation| <= window:
-    fuel_trim += deviation * gain            // small correction each idle cycle
-```
-
-With the stock pot centred at `0x80` (128 ADC counts ≈ 2.5 V), deviation is
-zero and no trim is applied.  A technician turning the pot shifts the wiper
-voltage and the ECU richens or leans the idle mixture accordingly.
-
-If the pot is **missing, disconnected, disturbed, or replaced by a 3-wire
-sensor**, pin 4 floats to an unpredictable voltage.  The ECU then either:
-- Triggers fault **00521** `CO-Poti Unterbrechung oder Kurzschluss` if the
-  voltage falls outside the `0x0762`–`0x0763` window
-- Applies a continuous non-zero trim if the voltage lands inside the window
-  but away from neutral — causing hunting, rough idle, and exhaust popping
-  on overrun as the ECU fights its own fuel map
+cycle it compares the ADC reading against a baseline and applies a small
+fuel trim proportional to the deviation.  If the pot is **missing,
+disconnected, disturbed, or replaced by a 3-wire sensor**, pin 4 floats to an
+unpredictable voltage.  The ECU then either:
+- Triggers fault **00521** `CO-Poti Unterbrechung oder Kurzschluss`
+- Applies a continuous non-zero trim if the voltage lands in an active
+  range — causing hunting, rough idle, and exhaust popping on overrun as the
+  ECU fights its own fuel map
 
 ---
 
-#### The ROM patch — three bytes, full effect
+#### The ROM patch — instruction redirect (confirmed on-car)
 
-The CO pot disable patch works by attacking all three pathways simultaneously:
+The CO pot disable patch works by redirecting the ECU's fuel trim calculation
+to produce zero output on every cycle, regardless of what pin 4 reads.
 
-**1. Widen the fault thresholds to the full ADC range**
+**How the ECU uses pin 4 (M68HC11 disassembly):**
 
-```
-0x0762: 0x0A → 0x00   (low threshold: 0.20 V → 0 V)
-0x0763: 0xEE → 0xFF   (high threshold: 4.67 V → 5 V)
-```
-
-This tells the ECU that any voltage on pin 4 is "valid" — the full 0–5 V
-range is within spec.  Fault 00521 cannot fire regardless of what pin 4 sees,
-including a completely floating or open-circuit input.
-
-**2. Zero the trim gain**
+The ECU reads pin 4 via ADC channel 8 and stores the result to a RAM location.
+Once per idle cycle it runs this trim calculation:
 
 ```
-0x0779: 0x04 → 0x00   (gain: 4 → 0)
+266D (MMS-05C):                      266B (MMS-04B):
+  $A348  LDAA $16F4  ; CO pot ADC      $A3A4  LDAA $42F4  ; CO pot ADC
+  $A34B  SUBA $149D  ; delta=pot-ch0   $A3A7  SUBA $409D  ; delta=pot-ch0
+  $A34E  BHS  +1     ; clamp ≥ 0       $A3AA  BHS  +1     ; clamp ≥ 0
+  $A350  CLRA        ;                  $A3AC  CLRA        ;
 ```
 
-With gain = 0, the trim calculation produces zero output regardless of
-deviation from neutral.  Even if pin 4 has a voltage and the ECU reads it,
-the result multiplied by zero is zero — no fuelling effect whatsoever.
+The LDAA loads the CO pot ADC result.  The SUBA subtracts a baseline channel
+reading (ch0).  The delta feeds downstream trim logic that adjusts fuelling.
 
-The neutral target (`0x0777 = 0x80`) and window (`0x0778 = 0x32`) are left
-unchanged.  With gain = 0 they are mathematically irrelevant, but leaving them
-at stock values makes the patch cleaner to detect and easier to reverse.
+**The patch:** redirect the LDAA to load ch0 instead of the CO pot:
 
-**Net result:** pin 4 is electrically inert.  Leave it unconnected.  The ECU
-reads it, calculates a deviation, multiplies by zero, and moves on.  No fault,
-no trim, no interaction with the fuel map.
+```
+266D: LDAA $16F4 → LDAA $149D   (file bytes 0x2349-0x234A: 0x16,0xF4 → 0x14,0x9D)
+266B: LDAA $42F4 → LDAA $409D   (file bytes 0x23A5-0x23A6: 0x42,0xF4 → 0x40,0x9D)
+```
+
+Now SUBA computes (ch0 − ch0) = 0 on every cycle.  The CO pot ADC still runs
+but its result is never read by the fuel path.  Pin 4 can float, be
+disconnected, or be connected — doesn't matter.  No fault, no trim, no
+interaction with the fuel map.
+
+**Checksum:** The ECU validates `sum(all 32,768 bytes) mod 256 = 0` at startup.
+HachiROM applies checksum correction automatically on every save — no manual
+step required.  This was confirmed on-car: a patched ROM without checksum
+correction causes the engine to die under throttle application.
+
+> **History note (March 2026):** An earlier version of this patch targeted
+> calibration scalars at 0x0762, 0x0763, and 0x0779 — widening fault thresholds
+> and zeroing a "gain" byte.  This was **wrong**.  Those addresses are unrelated
+> 16-bit calibration constants in the fuel/ignition path:
+> - 0x0762–0x0763: loaded as a 16-bit word by `LDD $8762` (4 firmware refs)
+> - 0x0779: subtraction operand in `SUBA $8779` (fuel calculation chain)
+>
+> Modifying them corrupts fuel delivery.  The instruction redirect above is the
+> correct and only supported patch.
 
 ---
 
 #### Confirming the patch is applied
 
-In HachiROM, open the **⚙ Scalars** tab after patching and verify:
+In HachiROM, the **Hardware tab → CO Pot** section shows the patch state:
 
-| Address  | Patched value |
-|----------|---------------|
-| `0x0762` | `0x00` (0)    |
-| `0x0763` | `0xFF` (255)  |
-| `0x0779` | `0x00` (0)    |
+| State       | Meaning |
+|-------------|---------|
+| `patched`   | LDAA redirected to ch0 — CO pot disabled |
+| `stock`     | LDAA reads CO pot ADC — CO pot active |
+| `unknown`   | Bytes don't match either known state |
 
-The **Hardware tab → CO Pot** section shows `patched` when all three bytes are
-at their patched values, `stock` when restored to stock, and `unknown` if any
-byte is at a non-standard value.
+HachiROM auto-detects whether the loaded ROM is 266D or 266B and checks the
+correct file offset for each variant.
 
 ---
 
 **Applying the patch: HachiROM Hardware tab → CO Pot**
 
 Open the ROM in HachiROM, go to the **Hardware** tab, and click
-**Change CO Pot State…** → select **Disabled**.  Save and burn.  Pin 4 can
-then be left **unconnected** with no fault code or fuelling effect.
-
-No external hardware required.
+**Change CO Pot State…** → select **Disabled**.  Save and burn.  HachiROM
+auto-detects 266D vs 266B and patches the correct file offset.  Checksum
+correction is applied automatically on save.  Pin 4 can then be left
+**unconnected** with no fault code or fuelling effect.
 
 **Alternative: external adjustable pot (if ROM patch is not desired)**
 
@@ -316,17 +307,13 @@ grundeinstellung_bis_390.htm, grundeinstellung_ab_390.htm*
 The new-version CO procedure reads measuring block value 8 via VAG 1551 or
 VCDS and adjusts the CO pot screw until the displayed value reaches **128**.
 
-This directly corresponds to ROM address `0x0777` — the CO pot neutral target
-byte, stock value `0x80` (128).  The ECU reports the current ADC reading on
-pin 4 as measuring block 8, and the technician turns the pot until it matches
-the stored neutral target.  With the screw centred at 128, deviation = 0 and
-the trim gain has no effect — the factory intended this as the correct idle
-mixture set point.
+The ECU reports the current ADC reading on pin 4 as measuring block 8, and the
+technician turns the pot until it matches the factory neutral target.  With the
+screw centred at 128, the trim delta is zero and the fuel map runs unmodified.
 
-This confirms why the CO pot patch works:
-- Neutral target `0x0777 = 128` is unchanged — the ECU still reports block 8
-- Gain `0x0779 = 0` means the reported value has no fuelling effect
-- Thresholds `0x0762/63 = 0x00/0xFF` prevent any fault regardless of pin 4
+This confirms why the CO pot patch works: with the LDAA redirected to load ch0,
+the delta computation always returns zero — the trim path is inert regardless
+of what pin 4 reads or what measuring block 8 reports.
 
 ### CO setting procedure — pre-3/90 (266B / MMS-04B)
 
