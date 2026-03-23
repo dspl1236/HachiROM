@@ -111,11 +111,10 @@ class SaveConfirmDialog(QDialog):
         layout.setSpacing(10)
 
         cs_sum = hr.compute_sum(data)
-        cs_tgt = variant.checksum.get("target", 0)
-        cs_ok  = cs_sum == cs_tgt
-        delta  = cs_sum - cs_tgt
+        cs_mod = cs_sum % 256
+        cs_ok  = cs_mod == 0
         cs_colour = "#2dff6e" if cs_ok else "#ff9900"
-        cs_text   = "✓  VALID" if cs_ok else f"⚠  INVALID  (delta {delta:+,})"
+        cs_text   = "✓  VALID" if cs_ok else f"⚠  INVALID  (mod256 = 0x{cs_mod:02X})"
 
         cs_box = QFrame()
         cs_box.setStyleSheet(
@@ -132,9 +131,9 @@ class SaveConfirmDialog(QDialog):
 
         rl("Checksum", cs_text, cs_colour)
         rl("Byte sum",  f"{cs_sum:,}")
-        rl("Target",    f"{cs_tgt:,}")
+        rl("mod 256",   f"0x{cs_mod:02X}  (must be 0x00)")
         if not cs_ok:
-            rl("Delta", f"{delta:+,}", "#ff9900")
+            rl("Delta", f"{cs_mod} byte(s) off", "#ff9900")
 
         layout.addWidget(QLabel("<b>Checksum</b>", styleSheet="color:#aaa;"))
         layout.addWidget(cs_box)
@@ -1388,8 +1387,7 @@ class OverviewTab(QWidget):
 
         res    = hr.detect(rom_snapshot)
         cs_sum = hr.compute_sum(rom_snapshot)
-        cs_tgt = variant.checksum.get("target", 0)
-        cs_ok  = cs_sum == cs_tgt
+        cs_ok  = hr.verify_checksum(rom_snapshot, variant)
         grid.addLayout(row("Confidence",  res.confidence))
         grid.addLayout(row("CRC32",       f"{res.crc32:#010x}"))
         grid.addLayout(row("SHA256",      res.sha256[:24] + "…"))
@@ -2583,8 +2581,8 @@ class ROMInfoWidget(QWidget):
         if result.variant:
             v      = result.variant
             cs_sum = hr.compute_sum(data)
-            cs_tgt = v.checksum.get("target", 0)
-            cs_ok  = cs_sum == cs_tgt
+            cs_mod = cs_sum % 256
+            cs_ok  = hr.verify_checksum(data, v)
             lines += [
                 f"Variant      : {v.name}",
                 f"Part Number  : {v.part_number}",
@@ -2597,10 +2595,10 @@ class ROMInfoWidget(QWidget):
                 "=== Checksum ===",
                 f"Status       : {'✓ VALID' if cs_ok else '⚠ INVALID'}",
                 f"Byte sum     : {cs_sum:,}",
-                f"Target       : {cs_tgt:,}",
+                f"mod 256      : 0x{cs_mod:02X}  (must be 0x00)",
             ]
             if not cs_ok:
-                lines.append(f"Delta        : {cs_sum - cs_tgt:+,}")
+                lines.append(f"Remainder    : {cs_mod} byte(s) off")
             lines += ["", "=== Map Addresses ===",
                       f"  {'NAME':<28} {'ADDR':>6}  {'SIZE':>5}  TYPE",
                       "  " + "-" * 52]
