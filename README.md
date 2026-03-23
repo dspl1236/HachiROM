@@ -41,7 +41,7 @@ generation with a different load sensing architecture (MAP-based, not MAF-based)
 - ⊕ **ROM Compare / Diff** — Side-by-side byte diff with map region tagging and delta values
 - ✅ **Checksum** — Auto-corrected on save (verify before burn)
 - 🔧 **MAF Axis Patch** — Rescale fuel/timing axis for a different MAF housing (266D/266B)
-- 🔧 **CO Pot Disable Patch** — Suppress fault 00521 when fitting a no-CO-pot sensor (266D)
+- 🔧 **CO Pot Disable Patch** — Suppress fault 00521 when fitting a no-CO-pot sensor (266D + 266B)
 - 💾 **Multi-format Save** — 32KB `.bin` (Teensy), 64KB 27C512 `.bin` (EPROM programmer)
 - 📦 **Python Library** — Use as a library in other projects
 
@@ -73,7 +73,7 @@ Auto-detected on open:
 
 ---
 
-## Patches — 266D only
+## Patches — 266D and 266B
 
 ### MAF Axis Patch
 
@@ -95,16 +95,19 @@ See [`docs/MAF_SENSOR_WIRING.md`](docs/MAF_SENSOR_WIRING.md) for full wiring and
 
 ### CO Pot Disable Patch
 
-Disables idle lambda trim (pin 4) and suppresses fault **00521** when no CO pot is present.  
-Confirmed by diffing clean stock 266D and 266B ROMs — three bytes changed:
+Disables idle lambda trim (pin 4) and suppresses fault **00521** when no CO pot is present.
+Works on both 266D and 266B — HachiROM auto-detects the variant.
 
-| Address | Stock | Patched | Effect |
-|---------|-------|---------|--------|
-| `0x0762` | `0x0A` | `0x00` | Low fault threshold → 0V |
-| `0x0763` | `0xEE` | `0xFF` | High fault threshold → 5V |
-| `0x0779` | `0x04` | `0x00` | Trim gain zeroed |
+The patch redirects the LDAA instruction that reads the CO pot ADC result to
+load the baseline channel instead, making the trim delta always zero:
 
-Pin 4 can be left unconnected after this patch. Both patches are independently reversible.
+| Variant | File offset | Stock | Patched | Effect |
+|---------|-------------|-------|---------|--------|
+| 266D | `0x2349–0x234A` | `0x16 0xF4` | `0x14 0x9D` | LDAA $16F4 → LDAA $149D |
+| 266B | `0x23A5–0x23A6` | `0x42 0xF4` | `0x40 0x9D` | LDAA $42F4 → LDAA $409D |
+
+Pin 4 can be left unconnected after this patch. Checksum is auto-corrected on save.
+Both patches are independently reversible.
 
 ---
 

@@ -1,8 +1,9 @@
 # Pin 4 — Freed ADC Input: Sensor Options & Patches
 
 When the CO pot disable patch is applied, ECU pin 4 (MAF connector) becomes
-a free 0–5V ADC input. The signal is still sampled every cycle but the gain
-is zeroed, so it has no effect on fuelling.
+a free 0–5V ADC input. The signal is still sampled every cycle but the trim
+LDAA is redirected to load the baseline channel, so the subtraction always
+produces zero — pin 4 has no effect on fuelling.
 
 HachiROM can write a linearisation table for the fitted sensor into a safe
 free ROM block. This documents the sensor for the Teensy emulator and enables
@@ -12,8 +13,9 @@ future correction table support when firmware patches are implemented.
 
 ## Requirements
 
-1. **CO pot patch must be applied first** — zeroes the gain so pin 4 has no
-   fuelling effect regardless of voltage. Apply via Hardware tab → CO Pot.
+1. **CO pot patch must be applied first** — redirects the trim LDAA to load
+   the baseline channel so pin 4 has no fuelling effect regardless of voltage.
+   Apply via Hardware tab → CO Pot.
 2. **Sensor wired to MAF connector pin 4** — see wiring notes per sensor below.
 3. **Teensy tap (optional)** — for active logging, also wire pin 4 to a Teensy
    analog input. The Teensy reads the sensor type from the ROM table automatically.
@@ -98,9 +100,9 @@ decode table to apply to the analog ADC reading on its input pin.
 
 **Supported ECUs:** Both 7A variants — 266D (MMS05C, 4-plug, post-3/90) and
 266B (MMS-04B, 2-plug, pre-3/90). Verified identical:
-- CO pot scalar block (0x0762–0x0779) — byte-for-byte same values
+- CO pot trim loop present in both firmware versions (same LDAA/SUBA/BHS/CLRA
+  instruction pattern, different RAM addresses — auto-detected by HachiROM)
 - Safe ROM block (0x1E87–0x1FFF) — 100% 0xFF, zero code references in both
-- CO pot trim loop present in both firmware versions
 
 **Not applicable:** AAH/MMS100/MMS200 V6 ECUs — 3-wire MAF sensor, no pin 4 exists.
 

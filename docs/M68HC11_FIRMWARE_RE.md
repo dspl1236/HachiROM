@@ -423,12 +423,12 @@ Bootstrap is documented here because:
 | DHC11 + ASHC11 workflow documented | ✓ |
 | IDA Pro 6811 workflow documented | ✓ |
 | 266D.CFG template created | ✓ |
-| CO pot ADC channel — specific channel | ❌ Needs firmware trace |
-| CO pot trim loop — exact address range | ❌ Needs disassembly |
+| CO pot ADC channel — specific channel | ✓ **Channel 8, code $28 (266D)** |
+| CO pot trim loop — exact address range | ✓ **$A348 (266D) / $A3A4 (266B) — confirmed on-car** |
 | Load index variable — RAM address | ❌ Needs firmware trace |
 | Safe block at `$9E87` confirmed | ✓ (both 266D and 266B) |
 | Teensy sensor table read implemented | ✓ (type byte + linearisation) |
-| Option A firmware patch written | ❌ Pending CO pot RE |
+| Option A firmware patch written | 🔶 CO pot disable done; Teensy correction loop pending |
 | Option B Teensy intercept | ❌ Pending address identification |
 | Live closed-loop wideband correction | ❌ Pending above |
 
@@ -867,16 +867,17 @@ than a firmware patch — because the port-based ADC is more complex to
 patch than the 266D's simple status register poll. Intercepting a ROM
 scalar that the trim subroutine reads is architecture-agnostic.
 
-### Status — 266B
+### Status — 266B (Updated March 2026)
 
 | Task | Status |
 |------|--------|
 | ADC interface type identified | ✓ Port-based serial multiplexer |
-| CO pot channel — specific sequence | ❌ Needs lower-half RE |
-| CO pot result RAM address | ❌ Unknown |
-| Trim subroutine location | ❌ Unknown |
+| CO pot channel — specific sequence | ✓ Result at $42F4, mux sequence not traced but patch confirmed |
+| CO pot result RAM address | ✓ **$42F4** (confirmed from byte search) |
+| CO pot trim point | ✓ **$A3A4** (LDAA $42F4 / SUBA $409D) |
+| CO pot instruction redirect | ✓ **0x23A5–0x23A6** (confirmed, same pattern as 266D) |
 | Safe block address | ✓ `$9100–$91FC` (253B, clean) |
-| HachiROM safe block update needed | ❌ Needs code change |
+| HachiROM CO pot patch | ✓ **Auto-detects 266D vs 266B** |
 
 ---
 
@@ -886,16 +887,14 @@ scalar that the trim subroutine reads is architecture-agnostic.
 
 ### Bottom Line
 
-**The CO pot patch findings from 266D do NOT directly port to 266B.**
-The two ECUs use different MCU configurations with different I/O maps,
-different firmware structure, and different ADC interfaces. The 266B
-requires its own RE session.
+**The CO pot disable patch IS portable between 266D and 266B.**
+Both use an identical instruction pattern (LDAA/SUBA/BHS/CLRA) at different
+file offsets with different RAM addresses. HachiROM auto-detects the variant
+and patches the correct location. The instruction redirect (LDAA operand
+change) makes the trim delta always zero — confirmed on-car for 266D.
 
-However: the calibration tables (fuel map, ignition maps) overlap
-significantly, and the safe block at `$9E87` is confirmed in both.
-The HachiROM CO pot patch (gain-zeroing in the scalar block) applies
-to both at the same ROM offsets — that part works. The *correction loop*
-patch requires separate work for 266B.
+The deeper Teensy correction loop (Option A / Option B) requires separate
+RE work per variant, as the ADC interfaces and I/O maps differ significantly.
 
 ---
 
@@ -937,16 +936,16 @@ and 4-plug (post-March 1990) variants.
 | OC1 ISR | `$BC43` | `$E647` |
 | OC3 ISR | `$A5F2` | `$A5F1` |
 | I/O mode | Extended (`$1000+`) | Direct page (`$00-$1F`) |
-| ADC trigger | `STAA $1006` | Not yet found |
-| ADC result | `LDAA $1007` → `$16F4` | Not yet found |
-| CO pot channel code | `$28` | Not yet found |
-| CO pot result address | `$16F4` | Not yet found |
-| CO pot trim point | `$A348` | Not yet found |
+| ADC trigger | `STAA $1006` | STX to port registers (serial mux) |
+| ADC result | `LDAA $1007` → `$16F4` | `LDAA $42F4` (CO pot) |
+| CO pot channel code | `$28` | Unknown (port-based serial mux) |
+| CO pot result address | `$16F4` | **`$42F4`** ✓ confirmed |
+| CO pot trim point | `$A348` | **`$A3A4`** ✓ confirmed |
 | Firmware similarity | — | 13.3% identical |
 | Fuel map (`$8000`) | Different calibration | Different calibration |
 | Ign map 1 (`$8100`) | **Identical** | **Identical** |
 | Safe block `$9E87` | ✓ Confirmed 0xFF | ✓ Confirmed 0xFF |
-| CO pot gain patch | ✓ Confirmed | ✓ Confirmed (same offset) |
+| CO pot instruction redirect | ✓ 0x2349–0x234A | ✓ 0x23A5–0x23A6 (confirmed) |
 
 ---
 
@@ -968,6 +967,7 @@ The 266B RE can be bootstrapped from what we know about 266D:
    near-identical address is interesting. The OC3 function is likely
    the same role (ADC scan) with different implementation. Worth tracing.
 
-4. **The safe block and gain-zero patch locations are identical** —
-   so HachiROM's existing 266B support for CO pot patching is correct.
-   Only the correction loop patch requires new RE work.
+4. **The CO pot instruction redirect is now confirmed for 266B** —
+   file 0x23A5–0x23A6 (LDAA $42F4 → LDAA $409D). Same pattern as 266D.
+   HachiROM auto-detects the variant. Only the Teensy correction loop
+   patch requires further RE work on 266B.
