@@ -342,17 +342,29 @@ def timing_encode(deg) -> int:
 # ---------------------------------------------------------------------------
 
 CHECKSUM_PARAMS = {
-    # The ECU validates: sum(32KB) ≡ 0 (mod 256).  Confirmed on-car.
+    # Algorithm: sum(32KB) ≡ 0 (mod 256).
     # "target" is the byte sum of one specific known-good ROM (for reference only).
     # The actual ECU check is: sum(32KB) mod 256 == 0.  The absolute sum varies
     # with every edit — only the mod-256 remainder matters.
     # Use verify_checksum() for validation, NOT comparison against "target".
     # "cs_from" is the first byte of the correction region (all 0xFF in OEM ROMs).
     # apply_checksum() adjusts byte(s) starting at cs_from to restore mod-256 = 0.
-    "266D": {"target": 3_384_576, "cs_from": 0x1600, "cs_to": 0x17FF},
-    "266B": {"target": 3_894_528, "cs_from": 0x1400, "cs_to": 0x1FFF},
+    #
+    # CONFIRMED ON-CAR (7A 20v):
+    #   266D, 266B — engine dies under throttle with bad checksum.
+    #
+    # ⚠ UNCONFIRMED ON-CAR (AAH V6):
+    #   AAH (MMS-100), MMS-200, MMS-300 — all known stock ROMs pass mod256=0
+    #   (MMS-300 stock dump has factory-erased correction region, same pattern
+    #   as 266B physical read — never sealed).  Algorithm is almost certainly
+    #   the same mod256 scheme but ECU enforcement has NOT been verified on-car.
+    #   Correction regions identified from 0xFF runs in stock dumps.
+    #
+    "266D":   {"target": 3_384_576, "cs_from": 0x1600, "cs_to": 0x17FF},
+    "266B":   {"target": 3_894_528, "cs_from": 0x1400, "cs_to": 0x1FFF},
     "AAH":    {"target": 3_684_096, "cs_from": 0x6700, "cs_to": 0x7D1E},
     "MMS200": {"target": 4_732_672, "cs_from": 0x6700, "cs_to": 0x7D1E},
+    "MMS300": {"target": 3_781_376, "cs_from": 0x2AA8, "cs_to": 0x2FEF},
 }
 
 
@@ -796,7 +808,7 @@ ROM_MMS300 = ROMVariant(
                 "Later revision than MMS-200. Fuel@0x0700, timing@0x1100, "
                 "knock@0x1200, NMAX 16-bit LE@0x0524.",
     maps=_MAPS_MMS300,
-    checksum={},
+    checksum=CHECKSUM_PARAMS["MMS300"],
     known_crc32s=[0x84dde88e],   # 32KB slice of Audi_100_2_8_-_8A0906266b_MMS-300.bin
     reset_vector=None,
 )
