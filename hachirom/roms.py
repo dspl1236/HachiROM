@@ -351,7 +351,8 @@ CHECKSUM_PARAMS = {
     # apply_checksum() adjusts byte(s) starting at cs_from to restore mod-256 = 0.
     "266D": {"target": 3_384_576, "cs_from": 0x1600, "cs_to": 0x17FF},
     "266B": {"target": 3_894_528, "cs_from": 0x1400, "cs_to": 0x1FFF},
-    "AAH":  {"target": 3_684_096, "cs_from": 0x6700, "cs_to": 0x7D1E},
+    "AAH":    {"target": 3_684_096, "cs_from": 0x6700, "cs_to": 0x7D1E},
+    "MMS200": {"target": 4_732_672, "cs_from": 0x6700, "cs_to": 0x7D1E},
 }
 
 
@@ -723,9 +724,11 @@ ROM_MMS200 = ROMVariant(
     chip="27C512", size=32768,
     description="Audi 90/A6/100 C4 2.8 V6 12v (AAH/ACK) — Hitachi MMS-200 platform. "
                 "Same ROM map layout as 4A0906266 (MMS100). "
-                "NMAX is 16-bit LE at 0x077D (RPM=raw/4). Checksum scheme unknown.",
+                "NMAX is 16-bit LE at 0x077D (RPM=raw/4). "
+                "Checksum: sum(32KB) mod 256 = 0, correction region 0x6700-0x7D1E "
+                "(same algorithm and region as MMS-100).",
     maps=_MAPS_MMS200,
-    checksum={},
+    checksum=CHECKSUM_PARAMS["MMS200"],
     known_crc32s=[0x1f78f1fe],   # V6AAHCoupeMMS200.bin
     # Internal version string: "8A0906266A MMS-200C V6H9D34B4 3700"
     # (V6H9 = V6 hardware rev 9, D34B4 = calibration ID, 3700 = build/date code)

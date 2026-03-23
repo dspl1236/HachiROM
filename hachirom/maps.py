@@ -102,8 +102,7 @@ def apply_checksum(data: bytes, variant: ROMVariant) -> bytearray:
     region for their more aggressive redistribution approach.
 
     If the variant has no checksum definition (checksum={}), returns the
-    ROM unchanged — MMS-200 and MMS-300 variants do not have a known
-    checksum correction region.
+    ROM unchanged — MMS-300 does not have a known checksum correction region.
     """
     cs = variant.checksum
     if not cs:
