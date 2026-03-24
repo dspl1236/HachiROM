@@ -26,6 +26,7 @@ jobs:
         with:
           name: HachiROM-Windows
           path: |
+          retention-days: 7
             dist/HachiROM-v*.exe
             dist/exe_name.txt
 
@@ -51,6 +52,7 @@ jobs:
         with:
           name: HachiROM-Linux
           path: |
+          retention-days: 7
             dist/HachiROM-v*
             dist/exe_name.txt
 
@@ -74,6 +76,7 @@ jobs:
         with:
           name: HachiROM-macOS
           path: |
+          retention-days: 7
             dist/HachiROM-v*
             dist/exe_name.txt
 
