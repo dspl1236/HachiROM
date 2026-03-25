@@ -14,16 +14,14 @@ Standalone desktop app plus Python library.
 > please [open an issue](https://github.com/dspl1236/HachiROM/issues).
 
 
-[![Build HachiROM](https://github.com/dspl1236/HachiROM/actions/workflows/build.yml/badge.svg)](https://github.com/dspl1236/HachiROM/actions/workflows/build.yml)
-![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20Linux%20%7C%20Mac-blue)
-![ROM](https://img.shields.io/badge/ROM-27C512%2064KB-yellow)
-![ECU](https://img.shields.io/badge/ECU-7A%2020v%20%7C%20AAH%2012v-orange)
+[![Build](https://github.com/dspl1236/HachiROM/actions/workflows/build.yml/badge.svg)](https://github.com/dspl1236/HachiROM/actions/workflows/build.yml)
+[![Download](https://img.shields.io/github/v/release/dspl1236/HachiRom?label=Download&logo=github)](https://github.com/dspl1236/HachiRom/releases/latest)
 
 ## ⬇ Download
 
 **→ [Download HachiROM (latest build)](https://github.com/dspl1236/HachiROM/releases/latest)**
 
-Windows `.exe`, macOS, and Linux binaries — no install required.
+Windows `.exe` — no install required. Run from source on Linux/macOS: `pip install -r requirements.txt && python app/main.py`
 
 ---
 
