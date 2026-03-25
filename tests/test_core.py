@@ -136,19 +136,22 @@ class TestFuel266DEncoding:
         assert fuel_266d_decode(0xF0) == pytest.approx(112.0)
 
     def test_encode_decode_round_trip(self):
-        # Only values >= 128 round-trip (encode clamps display-128 to 0)
-        # Values < 128 map to raw=0 (display=128) — retard is the floor
-        for display in [128, 140, 150, 160, 170, 180]:
+        # Full range round-trip: display 0–255 should survive encode→decode
+        for display in [0, 40, 80, 100, 110, 120, 128, 140, 180, 200, 255]:
             raw  = fuel_266d_encode(float(display))
             back = fuel_266d_decode(raw)
             assert abs(back - display) <= 1.0, \
                 f"display={display} → raw=0x{raw:02X} → {back}"
 
-    def test_values_below_128_clamp_to_128(self):
-        # Values below 128 encode to raw=0 which decodes to 128
-        for display in [100, 110, 120, 127]:
+    def test_rich_values_encode_via_twos_complement(self):
+        # Stock 266D fuel values are in display range 40–123 (rich, below 128).
+        # These must encode via two's complement wrapping, not clip to 0.
+        for display in [40, 80, 100, 110, 120, 127]:
             raw = fuel_266d_encode(float(display))
-            assert raw == 0, f"display={display} should encode to 0, got {raw}"
+            back = fuel_266d_decode(raw)
+            assert abs(back - display) <= 1.0, \
+                f"display={display} → raw=0x{raw:02X} → back={back} (expected ~{display})"
+            assert raw != 0, f"display={display} must not encode to 0 (two's complement bug)"
 
     def test_encode_clamps_to_byte(self):
         assert 0 <= fuel_266d_encode(300.0) <= 255
@@ -186,21 +189,23 @@ class TestFuelLambdaEncoding:
         assert back is not None
 
     def test_encode_decode_round_trip(self):
-        # fuel_lambda_encode only encodes λ >= 1.0 (lean/stoich range).
-        # Values below 1.0 return raw=0 which decodes back to 1.0 — not a round-trip.
-        # Test only the range the function is designed for.
-        for lam in [1.0, 1.05, 1.10, 1.15]:
+        # Full lambda range round-trip: both rich (< 1.0) and lean (> 1.0)
+        for lam in [0.625, 0.75, 0.85, 0.90, 0.95, 1.0, 1.05, 1.10, 1.15]:
             raw  = fuel_lambda_encode(lam)
             back = fuel_lambda_decode(raw)
             assert back is not None
-            assert abs(back - lam) < 0.1, \
+            assert abs(back - lam) < 0.01, \
                 f"λ={lam} → raw=0x{raw:02X} → {back}"
 
-    def test_sub_stoich_encodes_to_zero(self):
-        # Values below stoich encode to raw=0 (clipped) — document this behaviour
-        for lam in [0.85, 0.90, 0.95]:
+    def test_rich_lambda_encodes_via_twos_complement(self):
+        # Stock AAH/266B fuel maps are lambda 0.625–0.867 (rich).
+        # These must encode via two's complement wrapping, not clip to 0.
+        for lam in [0.625, 0.75, 0.85, 0.867, 0.90, 0.95]:
             raw = fuel_lambda_encode(lam)
-            assert raw == 0, f"λ={lam} should encode to 0, got {raw}"
+            back = fuel_lambda_decode(raw)
+            assert abs(back - lam) < 0.01, \
+                f"λ={lam} → raw=0x{raw:02X} → back={back}"
+            assert raw != 0, f"λ={lam} must not encode to 0 (two's complement bug)"
 
 
 # ── Detection ─────────────────────────────────────────────────────────────────

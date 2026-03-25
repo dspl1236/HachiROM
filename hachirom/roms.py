@@ -321,14 +321,14 @@ def fuel_266d_decode(v: int) -> float:
     return float(signed + 128)
 
 def fuel_266d_encode(display: float) -> int:
-    return max(0, min(255, round(display - 128))) & 0xFF
+    return round(display - 128) & 0xFF
 
 def fuel_lambda_decode(v: int) -> float:
     signed = v if v < 128 else v - 256
     return round(signed * 0.007813 + 1.0, 3)
 
 def fuel_lambda_encode(lam: float) -> int:
-    return max(0, min(255, round((lam - 1.0) / 0.007813))) & 0xFF
+    return round((lam - 1.0) / 0.007813) & 0xFF
 
 def timing_decode(v: int) -> int:
     return v if v < 128 else v - 256
