@@ -224,7 +224,7 @@ class MafPatchDialog(QDialog):
         current_profile = hr.detect_maf_patch(rom_data)
 
         layout = QVBoxLayout(self)
-        layout.setSpacing(10)
+        layout.setSpacing(6)
 
         # ── Current state banner ────────────────────────────────────────────
         profile_info = hr.MAF_PROFILES.get(current_profile, {})
@@ -278,21 +278,21 @@ class MafPatchDialog(QDialog):
             row = QFrame()
             row.setStyleSheet(
                 "background:#1a1a1a; border:1px solid #333; "
-                "padding:6px; border-radius:3px;")
+                "padding:4px; border-radius:3px;")
             rl = QHBoxLayout(row)
-            rl.setContentsMargins(4, 2, 4, 2)
+            rl.setContentsMargins(4, 1, 4, 1)
 
             rb = QRadioButton(p["label"])
-            rb.setStyleSheet("color:#d4d4d4; font-weight:bold;")
+            rb.setStyleSheet("color:#d4d4d4; font-weight:bold; font-size:11px;")
             if key == current_profile:
                 rb.setChecked(True)
             btn_group.addButton(rb)
             self._buttons[key] = rb
 
             detail = QLabel(
-                f"<span style='color:#666; font-size:11px;'>"
-                f"{p['housing']}<br>"
-                f"<b style='color:#888'>{p['hp_note']}</b></span>",
+                f"<span style='color:#888; font-size:10px;'>"
+                f"{p['housing']} — "
+                f"<b>{p['hp_note']}</b></span>",
                 textFormat=Qt.RichText)
             detail.setWordWrap(True)
 
@@ -304,7 +304,7 @@ class MafPatchDialog(QDialog):
             if p.get("plug_play"):
                 pp_lbl = QLabel("✔ plug-and-play wiring")
                 pp_lbl.setStyleSheet(
-                    "color:#2dff6e; font-size:10px; background:#0a1a0a; "
+                    "color:#2dff6e; font-size:9px; background:#0a1a0a; "
                     "border:1px solid #1a5c1a; padding:1px 4px; border-radius:2px;")
                 pp_lbl.setToolTip("No wiring changes needed — original 4-pin connector fits directly.")
                 badges.addWidget(pp_lbl)
@@ -312,7 +312,7 @@ class MafPatchDialog(QDialog):
             if p["co_pot"]:
                 co_lbl = QLabel("CO pot retained")
                 co_lbl.setStyleSheet(
-                    "color:#888; font-size:10px; background:#222; "
+                    "color:#888; font-size:9px; background:#222; "
                     "border:1px solid #444; padding:1px 4px; border-radius:2px;")
                 co_lbl.setToolTip(
                     "This sensor retains the CO trim pot on pin 4.\n"
@@ -320,7 +320,7 @@ class MafPatchDialog(QDialog):
             else:
                 co_lbl = QLabel("4-wire  ⚠ bridge pin 4")
                 co_lbl.setStyleSheet(
-                    "color:#ff9900; font-size:10px; background:#2a1a00; "
+                    "color:#ff9900; font-size:9px; background:#2a1a00; "
                     "border:1px solid #664400; padding:1px 4px; border-radius:2px;")
                 co_lbl.setToolTip(
                     "3-wire sensor — no CO pot (pin 4).\n"
@@ -336,15 +336,12 @@ class MafPatchDialog(QDialog):
             badge_widget.setLayout(badges)
 
             detail_col = QVBoxLayout()
-            detail_col.setSpacing(2)
+            detail_col.setSpacing(1)
             detail_col.setContentsMargins(0, 0, 0, 0)
             detail_col.addWidget(detail)
+            # Notes moved to tooltip on radio button instead of inline
             if p.get("note"):
-                note_lbl = QLabel(
-                    f"<span style='color:#888; font-size:10px;'>⚠ {p['note']}</span>",
-                    textFormat=Qt.RichText)
-                note_lbl.setWordWrap(True)
-                detail_col.addWidget(note_lbl)
+                rb.setToolTip(p["note"])
             detail_col.addWidget(badge_widget)
             detail_container = QWidget()
             detail_container.setLayout(detail_col)
@@ -368,12 +365,10 @@ class MafPatchDialog(QDialog):
             "<b style='color:#ff4444'>⚠  EXPERIMENTAL — not verified on a running engine</b>",
             textFormat=Qt.RichText))
         exp_lay.addWidget(QLabel(
-            "<span style='color:#aaa; font-size:11px;'>"
-            "The axis values for this profile are derived from published sensor "
-            "transfer function data and bore area calculations.  They have not been "
-            "validated on a live engine.  The 1.8T housing bore is also unconfirmed "
-            "(community measurement ~60.3 mm — axis recalculation pending).<br>"
-            "<b>You must verify fuelling with a wideband O2 sensor before any road use.</b>"
+            "<span style='color:#aaa; font-size:10px;'>"
+            "Axis values derived from published sensor data and bore calculations — "
+            "not validated on a live engine. "
+            "<b>Verify fuelling with a wideband O2 before road use.</b>"
             "</span>",
             textFormat=Qt.RichText))
         exp_box.setVisible(False)
@@ -391,19 +386,11 @@ class MafPatchDialog(QDialog):
             "<b style='color:#ff9900'>⚠  CO pot (pin 4) — hardware action required</b>",
             textFormat=Qt.RichText))
         co_lay.addWidget(QLabel(
-            "<span style='color:#aaa; font-size:11px;'>"
-            "Pin 4 on the 7A MAF connector is an <b>input</b> to the ECU — the CO pot "
-            "wiper feeds a voltage (1.0–7.5 V) back to the ECU for idle lambda trim. "
-            "This sensor has no CO pot.  Pin 4 must not be left floating or "
-            "fault code 00521 will be stored and idle will be affected.<br><br>"
-            "<b>Option A — adjustable (matches original behaviour):</b><br>"
-            "Wire a 20 kΩ 10-turn pot (Reichelt 534-20K): "
-            "pin 1 → GND via 1 kΩ resistor, wiper → ECU pin 4.  "
-            "Adjust for correct idle trim over the 1.0–7.5 V range.<br><br>"
-            "<b>Option B — fixed neutral (trim locked at zero):</b><br>"
-            "Resistor divider from pin 3 (+12V) to pin 2 (GND), wiper to ECU pin 4. "
-            "<i>Exact resistor values TBD — pot supply voltage unconfirmed. "
-            "Do not use until values are verified.</i>"
+            "<span style='color:#aaa; font-size:10px;'>"
+            "This sensor has no CO pot on pin 4. Pin 4 must not be left floating "
+            "or fault 00521 will be stored. "
+            "<b>Option A:</b> Wire a 20kΩ 10-turn pot (pin 1→GND via 1kΩ, wiper→ECU pin 4). "
+            "<b>Option B:</b> Apply the CO pot ROM patch (zeros the trim gain — pin 4 has no effect)."
             "</span>",
             textFormat=Qt.RichText))
         co_box.setVisible(False)
