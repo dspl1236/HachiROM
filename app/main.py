@@ -218,7 +218,7 @@ class MafPatchDialog(QDialog):
     def __init__(self, rom_data: bytes, parent=None):
         super().__init__(parent)
         self.setWindowTitle("MAF Sensor Patch — 266D")
-        self.setMinimumWidth(560)
+        self.setMinimumWidth(700)
         self.setModal(True)
 
         current_profile = hr.detect_maf_patch(rom_data)
@@ -241,46 +241,50 @@ class MafPatchDialog(QDialog):
         banner = QFrame()
         banner.setStyleSheet(
             f"background:#111; border:1px solid {banner_colour}; "
-            f"padding:8px; border-radius:3px;")
+            f"padding:6px; border-radius:3px;")
         bl = QVBoxLayout(banner)
-        bl.setSpacing(3)
+        bl.setSpacing(2)
         bl.addWidget(QLabel(
             f"<b style='color:#888'>Current sensor&nbsp;&nbsp;</b>"
             f"<span style='color:{banner_colour}'>{banner_text}</span>",
             textFormat=Qt.RichText))
-        if current_profile not in ("unknown", "inconsistent"):
-            bl.addWidget(QLabel(
-                f"<span style='color:#666; font-size:11px;'>"
-                f"{profile_info.get('housing', '')} — "
-                f"{profile_info.get('hp_note', '')}</span>",
-                textFormat=Qt.RichText))
         layout.addWidget(QLabel("<b>Detected in ROM</b>", styleSheet="color:#aaa;"))
         layout.addWidget(banner)
 
-        # ── Sensor selection ────────────────────────────────────────────────
+        # ── Main content: left selector + right detail ──────────────────────
         layout.addWidget(QLabel("<b>Apply sensor patch</b>", styleSheet="color:#aaa;"))
 
+        split = QHBoxLayout()
+        split.setSpacing(10)
+
+        # -- LEFT: compact radio list ----------------------------------------
+        left = QVBoxLayout()
+        left.setSpacing(4)
+
         self._buttons: dict[str, QRadioButton] = {}
+        self._profiles_data: dict[str, dict] = {}
         btn_group = QButtonGroup(self)
 
         last_group = None
         for key, p in hr.MAF_PROFILES.items():
-            # Group separator heading
+            self._profiles_data[key] = p
+
             group = p.get("group", "")
             if group != last_group:
                 grp_lbl = QLabel(group)
                 grp_lbl.setStyleSheet(
-                    "color:#666; font-size:10px; text-transform:uppercase; "
-                    "letter-spacing:1px; padding:4px 0 2px 2px;")
-                layout.addWidget(grp_lbl)
+                    "color:#666; font-size:9px; text-transform:uppercase; "
+                    "letter-spacing:1px; padding:2px 0 1px 2px;")
+                left.addWidget(grp_lbl)
                 last_group = group
 
             row = QFrame()
             row.setStyleSheet(
                 "background:#1a1a1a; border:1px solid #333; "
-                "padding:4px; border-radius:3px;")
-            rl = QHBoxLayout(row)
-            rl.setContentsMargins(4, 1, 4, 1)
+                "padding:3px; border-radius:3px;")
+            rl = QVBoxLayout(row)
+            rl.setContentsMargins(4, 2, 4, 2)
+            rl.setSpacing(2)
 
             rb = QRadioButton(p["label"])
             rb.setStyleSheet("color:#d4d4d4; font-weight:bold; font-size:11px;")
@@ -289,129 +293,73 @@ class MafPatchDialog(QDialog):
             btn_group.addButton(rb)
             self._buttons[key] = rb
 
-            detail = QLabel(
-                f"<span style='color:#888; font-size:10px;'>"
-                f"{p['housing']} — "
-                f"<b>{p['hp_note']}</b></span>",
-                textFormat=Qt.RichText)
-            detail.setWordWrap(True)
-
-            # Badges: plug-and-play indicator + CO pot status
+            # Compact badges row
             badges = QHBoxLayout()
             badges.setSpacing(4)
             badges.setContentsMargins(0, 0, 0, 0)
-
             if p.get("plug_play"):
-                pp_lbl = QLabel("✔ plug-and-play wiring")
-                pp_lbl.setStyleSheet(
+                pp = QLabel("✔ plug-and-play")
+                pp.setStyleSheet(
                     "color:#2dff6e; font-size:9px; background:#0a1a0a; "
                     "border:1px solid #1a5c1a; padding:1px 4px; border-radius:2px;")
-                pp_lbl.setToolTip("No wiring changes needed — original 4-pin connector fits directly.")
-                badges.addWidget(pp_lbl)
-
+                badges.addWidget(pp)
             if p["co_pot"]:
-                co_lbl = QLabel("CO pot retained")
-                co_lbl.setStyleSheet(
+                co = QLabel("CO pot retained")
+                co.setStyleSheet(
                     "color:#888; font-size:9px; background:#222; "
                     "border:1px solid #444; padding:1px 4px; border-radius:2px;")
-                co_lbl.setToolTip(
-                    "This sensor retains the CO trim pot on pin 4.\n"
-                    "Idle mixture adjustment works exactly as standard.")
             else:
-                co_lbl = QLabel("4-wire  ⚠ bridge pin 4")
-                co_lbl.setStyleSheet(
+                co = QLabel("⚠ bridge pin 4")
+                co.setStyleSheet(
                     "color:#ff9900; font-size:9px; background:#2a1a00; "
                     "border:1px solid #664400; padding:1px 4px; border-radius:2px;")
-                co_lbl.setToolTip(
-                    "3-wire sensor — no CO pot (pin 4).\n"
-                    "Fault code 00521 will be stored if pin 4 is left open.\n"
-                    "Hardware fix: 1kΩ resistor from pot pin 1 to GND,\n"
-                    "wiper (pin 2) to ECU pin 4, 20kΩ 10-turn pot.\n"
-                    "Covers 1.0–7.5V range — adjustable like original.\n"
-                    "(Source: 20v-sauger-tuning.de — Reichelt 534-20K pot)")
-            badges.addWidget(co_lbl)
+            badges.addWidget(co)
             badges.addStretch()
-
-            badge_widget = QWidget()
-            badge_widget.setLayout(badges)
-
-            detail_col = QVBoxLayout()
-            detail_col.setSpacing(1)
-            detail_col.setContentsMargins(0, 0, 0, 0)
-            detail_col.addWidget(detail)
-            # Notes moved to tooltip on radio button instead of inline
-            if p.get("note"):
-                rb.setToolTip(p["note"])
-            detail_col.addWidget(badge_widget)
-            detail_container = QWidget()
-            detail_container.setLayout(detail_col)
+            badge_w = QWidget()
+            badge_w.setLayout(badges)
 
             rl.addWidget(rb)
-            rl.addWidget(detail_container, 1)
-            layout.addWidget(row)
+            rl.addWidget(badge_w)
+            left.addWidget(row)
 
-        # If none of the known profiles is selected (unknown/inconsistent), default to stock
         if not any(rb.isChecked() for rb in self._buttons.values()):
             self._buttons["stock_7a"].setChecked(True)
 
-        # ── Experimental warning box ─────────────────────────────────────────
-        exp_box = QFrame()
-        exp_box.setStyleSheet(
-            "background:#1a0a0a; border:1px solid #882222; "
-            "padding:8px; border-radius:3px;")
-        exp_lay = QVBoxLayout(exp_box)
-        exp_lay.setSpacing(2)
-        exp_lay.addWidget(QLabel(
-            "<b style='color:#ff4444'>⚠  EXPERIMENTAL — not verified on a running engine</b>",
-            textFormat=Qt.RichText))
-        exp_lay.addWidget(QLabel(
-            "<span style='color:#aaa; font-size:10px;'>"
-            "Axis values derived from published sensor data and bore calculations — "
-            "not validated on a live engine. "
-            "<b>Verify fuelling with a wideband O2 before road use.</b>"
-            "</span>",
-            textFormat=Qt.RichText))
-        exp_box.setVisible(False)
-        layout.addWidget(exp_box)
-        self._exp_box = exp_box
+        left.addStretch()
+        left_w = QWidget()
+        left_w.setLayout(left)
+        left_w.setFixedWidth(280)
+        split.addWidget(left_w)
 
-        # ── CO pot warning box ───────────────────────────────────────────────
-        co_box = QFrame()
-        co_box.setStyleSheet(
-            "background:#1a1200; border:1px solid #664400; "
-            "padding:8px; border-radius:3px;")
-        co_lay = QVBoxLayout(co_box)
-        co_lay.setSpacing(2)
-        co_lay.addWidget(QLabel(
-            "<b style='color:#ff9900'>⚠  CO pot (pin 4) — hardware action required</b>",
-            textFormat=Qt.RichText))
-        co_lay.addWidget(QLabel(
-            "<span style='color:#aaa; font-size:10px;'>"
-            "This sensor has no CO pot on pin 4. Pin 4 must not be left floating "
-            "or fault 00521 will be stored. "
-            "<b>Option A:</b> Wire a 20kΩ 10-turn pot (pin 1→GND via 1kΩ, wiper→ECU pin 4). "
-            "<b>Option B:</b> Apply the CO pot ROM patch (zeros the trim gain — pin 4 has no effect)."
-            "</span>",
-            textFormat=Qt.RichText))
-        co_box.setVisible(False)
-        layout.addWidget(co_box)
-        self._co_box = co_box
+        # -- RIGHT: detail panel (swaps on selection) -------------------------
+        self._detail_frame = QFrame()
+        self._detail_frame.setStyleSheet(
+            "background:#151515; border:1px solid #333; "
+            "border-radius:3px; padding:10px;")
+        self._detail_layout = QVBoxLayout(self._detail_frame)
+        self._detail_layout.setSpacing(6)
+        self._detail_layout.setContentsMargins(10, 8, 10, 8)
 
-        # Update warning visibility when selection changes
+        # Populate with initial selection
+        self._detail_widgets: list[QWidget] = []
+        split.addWidget(self._detail_frame, 1)
+        layout.addLayout(split)
+
+        # Wire up selection changes
         for key, rb in self._buttons.items():
             rb.toggled.connect(lambda checked, k=key: self._on_profile_changed(k, checked))
 
-        # Initial state
+        # Initial detail panel fill
         for key, rb in self._buttons.items():
             if rb.isChecked():
                 self._on_profile_changed(key, True)
+                break
 
         # ── Patch scope note ─────────────────────────────────────────────────
         scope = QLabel(
             "<span style='color:#555; font-size:10px;'>"
             "Patch rewrites MAF axis breakpoints at 0x05D0 (fuel) and 0x05E0 (timing). "
-            "Fuel and timing map <i>data</i> is unchanged — only the axis lookup is rescaled "
-            "so the ECU interpolates correctly for the new sensor's transfer function."
+            "Map data is unchanged — only the axis lookup is rescaled."
             "</span>",
             textFormat=Qt.RichText)
         scope.setWordWrap(True)
@@ -443,9 +391,79 @@ class MafPatchDialog(QDialog):
     def _on_profile_changed(self, key: str, checked: bool):
         if not checked:
             return
-        p = hr.MAF_PROFILES[key]
-        self._exp_box.setVisible(bool(p.get("experimental", False)))
-        self._co_box.setVisible(not p["co_pot"])
+        p = self._profiles_data.get(key, {})
+
+        # Clear existing detail widgets
+        for w in self._detail_widgets:
+            self._detail_layout.removeWidget(w)
+            w.deleteLater()
+        self._detail_widgets.clear()
+
+        def add_label(html, wrap=True):
+            lbl = QLabel(html, textFormat=Qt.RichText)
+            lbl.setWordWrap(wrap)
+            self._detail_layout.addWidget(lbl)
+            self._detail_widgets.append(lbl)
+            return lbl
+
+        def add_divider():
+            d = QFrame()
+            d.setFrameShape(QFrame.HLine)
+            d.setStyleSheet("color:#333; max-height:1px;")
+            self._detail_layout.addWidget(d)
+            self._detail_widgets.append(d)
+
+        # Title
+        add_label(f"<b style='color:#d4d4d4; font-size:13px;'>{p.get('label','')}</b>")
+
+        # Housing info
+        add_label(f"<span style='color:#888; font-size:11px;'>{p.get('housing','')}</span>")
+        add_label(f"<span style='color:#aaa; font-size:11px;'>{p.get('hp_note','')}</span>")
+
+        add_divider()
+
+        # CO pot status
+        if p.get("co_pot"):
+            add_label("<span style='color:#2dff6e; font-size:11px;'>"
+                      "✔ CO pot retained — no wiring changes for pin 4</span>")
+        else:
+            add_label("<span style='color:#ff9900; font-size:11px;'>"
+                      "⚠ No CO pot — pin 4 must be bridged or CO pot ROM patch applied. "
+                      "Fault 00521 if left floating.</span>")
+            add_label("<span style='color:#888; font-size:10px;'>"
+                      "<b>Hardware fix:</b> 20kΩ 10-turn pot — pin 1→GND via 1kΩ, "
+                      "wiper→ECU pin 4 (1.0–7.5V range).<br>"
+                      "<b>ROM fix:</b> Apply CO pot disable patch on the Patches tab.</span>")
+
+        # Plug-and-play status
+        if p.get("plug_play"):
+            add_label("<span style='color:#2dff6e; font-size:11px;'>"
+                      "✔ Plug-and-play — original 4-pin connector fits directly</span>")
+        else:
+            if not p.get("co_pot"):
+                add_label("<span style='color:#888; font-size:10px;'>"
+                          "<b>Wiring:</b> 7A pin 3→sensor +12V, pin 2→GND, "
+                          "pin 1→signal. Pin 4 — see above.</span>")
+
+        # Notes / warnings
+        note = p.get("note", "")
+        if note:
+            add_divider()
+            add_label(f"<span style='color:#aaa; font-size:10px;'>ℹ {note}</span>")
+
+        # Experimental warning
+        if p.get("experimental"):
+            add_divider()
+            add_label("<span style='color:#ff4444; font-size:11px;'>"
+                      "⚠ EXPERIMENTAL — axis unverified on engine. "
+                      "Verify fuelling with wideband O2 before road use.</span>")
+
+        # Stretch at bottom to keep content top-aligned
+        spacer = QWidget()
+        spacer.setMinimumHeight(0)
+        self._detail_layout.addWidget(spacer)
+        self._detail_widgets.append(spacer)
+        self._detail_layout.addStretch()
 
     def _on_apply(self):
         for key, rb in self._buttons.items():

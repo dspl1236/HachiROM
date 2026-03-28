@@ -232,7 +232,7 @@ MAF_AXIS_1_8T_60    = [5, 9, 19, 31, 54, 65, 80, 94, 125, 142, 159, 177, 234, 25
 # Same sensor element as above — larger housing bore → lower voltage at same airflow.
 # Axis derived from published 1.8T / VR6 transfer function data.
 # Housing: MK4 VR6 / Audi TT 225 — Bosch 0280218042 / 0280218116
-# Suitable for K04 / hybrid turbo setups, ~250–300 hp.
+# Larger bore for higher-airflow applications.
 # NOTE: verify against a wideband before road use.
 MAF_AXIS_1_8T_VR6   = [4, 8, 16, 27, 46, 56, 69, 81, 107, 122, 137, 152, 201, 219, 242, 242]
 
@@ -284,7 +284,7 @@ MAF_PROFILES: dict = {
         "group":        "Bosch 1.8T sensor  (5-pin, IAT integrated — CO pot wiring required)  ⚠ EXPERIMENTAL",
         "axis":          MAF_AXIS_1_8T_60,
         "housing":      "Stock 1.8T MAF housing — Bosch 0280218114",
-        "hp_note":      "Mild–moderate power upgrade",
+        "hp_note":      "Bosch 5-pin with IAT — 60mm bore",
         "co_pot":        False,
         "plug_play":     False,
         "experimental":  True,
@@ -300,7 +300,7 @@ MAF_PROFILES: dict = {
         "group":        "Bosch 1.8T sensor  (5-pin, IAT integrated — CO pot wiring required)  ⚠ EXPERIMENTAL",
         "axis":          MAF_AXIS_1_8T_VR6,
         "housing":      "MK4 VR6 / Audi TT 225 housing — Bosch 0280218042 / 0280218116",
-        "hp_note":      "~250–300 hp — K04 / hybrid turbo",
+        "hp_note":      "Bosch 5-pin with IAT — 69.85mm bore",
         "co_pot":        False,
         "plug_play":     False,
         "experimental":  True,
