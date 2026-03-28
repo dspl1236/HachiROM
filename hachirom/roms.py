@@ -281,10 +281,10 @@ MAF_PROFILES: dict = {
     # ── Group B — Bosch 1.8T sensor ⚠ EXPERIMENTAL ───────────────────────
     "sensor_1_8t_60":   {
         "label":        "⚠ 1.8T sensor + 1.8T housing  (60mm)  [EXPERIMENTAL]",
-        "group":        "Bosch 1.8T sensor  (5-pin, IAT integrated — CO pot wiring required)  ⚠ EXPERIMENTAL",
+        "group":        "Bosch 1.8T sensor  (5-pin, IAT integrated)  ⚠ EXPERIMENTAL",
         "axis":          MAF_AXIS_1_8T_60,
-        "housing":      "Stock 1.8T MAF housing — Bosch 0280218114",
-        "hp_note":      "Bosch 5-pin with IAT — 60mm bore",
+        "housing":      "Bosch 0280218114 — 60mm bore",
+        "hp_note":      "Alternative sensor option — Bosch 5-pin with integrated IAT",
         "co_pot":        False,
         "plug_play":     False,
         "experimental":  True,
@@ -297,10 +297,10 @@ MAF_PROFILES: dict = {
     },
     "sensor_1_8t_vr6":  {
         "label":        "⚠ 1.8T sensor + VR6/TT225 housing  (69.85mm)  [EXPERIMENTAL]",
-        "group":        "Bosch 1.8T sensor  (5-pin, IAT integrated — CO pot wiring required)  ⚠ EXPERIMENTAL",
+        "group":        "Bosch 1.8T sensor  (5-pin, IAT integrated)  ⚠ EXPERIMENTAL",
         "axis":          MAF_AXIS_1_8T_VR6,
-        "housing":      "MK4 VR6 / Audi TT 225 housing — Bosch 0280218042 / 0280218116",
-        "hp_note":      "Bosch 5-pin with IAT — 69.85mm bore",
+        "housing":      "Bosch 0280218042 / 0280218116 — 69.85mm bore",
+        "hp_note":      "Alternative sensor option — larger bore for high-flow applications",
         "co_pot":        False,
         "plug_play":     False,
         "experimental":  True,
