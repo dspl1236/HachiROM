@@ -199,22 +199,22 @@ class TestUrROMDashboard:
         "ecu_id": {"part_number": "4A0907551AA", "component": "M2.3.2"},
         "groups": {
             "1": {"cells": [
-                {"index":1,"value":2800.0,"label":"RPM"},
-                {"index":2,"value":87.0,  "label":"ECT"},
-                {"index":3,"value":1.02,  "label":"Lambda"},
-                {"index":4,"value":24.0,  "label":"Timing"},
+                {"index":1,"value":70.0,    "label":"RPM"},
+                {"index":2,"value":157.0,   "label":"ECT"},
+                {"index":3,"value":130.56,  "label":"Lambda"},
+                {"index":4,"value":49.64,   "label":"Timing"},
             ]},
             "3": {"cells": [
-                {"index":1,"value":2800.0,"label":"RPM"},
-                {"index":2,"value":140.0, "label":"Load"},
-                {"index":3,"value":18.5,  "label":"TPS"},
-                {"index":4,"value":22.0,  "label":"IAT"},
+                {"index":1,"value":70.0,    "label":"RPM"},
+                {"index":2,"value":140.0,   "label":"Load"},
+                {"index":3,"value":44.47,   "label":"TPS"},
+                {"index":4,"value":92.0,    "label":"IAT"},
             ]},
             "6": {"cells": [
-                {"index":1,"value":65.0,  "label":"N75 DC"},
-                {"index":2,"value":60.0,  "label":"N75 req"},
-                {"index":3,"value":195.0, "label":"MAP kPa"},
-                {"index":4,"value":190.0, "label":"MAP req"},
+                {"index":1,"value":166.0,   "label":"N75 DC"},
+                {"index":2,"value":153.0,   "label":"N75 req"},
+                {"index":3,"value":166.0,   "label":"MAP kPa"},
+                {"index":4,"value":162.0,   "label":"MAP req"},
             ]},
         }
     }
@@ -223,13 +223,13 @@ class TestUrROMDashboard:
         from urrom.kwp import LiveValues
         lv = LiveValues(self._state)
         assert lv.valid
-        assert lv.rpm == 2800.0
-        assert lv.ect == 87.0
-        assert lv.lambda_ == 1.02
-        assert lv.timing == 24.0
-        assert lv.map_kpa == 195.0
-        assert lv.n75_dc == 65.0
-        assert lv.iat == 22.0
+        assert lv.rpm == pytest.approx(2800.0, abs=1)
+        assert lv.ect == pytest.approx(87.0, abs=0.1)
+        assert lv.lambda_ == pytest.approx(1.02, abs=0.01)
+        assert lv.timing == pytest.approx(24.0, abs=0.1)
+        assert lv.map_kpa == pytest.approx(195.3, abs=0.1)
+        assert lv.n75_dc == pytest.approx(65.1, abs=0.1)
+        assert lv.iat == pytest.approx(22.0, abs=0.1)
 
     def test_constructs_and_shows(self, qt_app):
         from urrom.kwp import KWPMonitor, DashboardWindow
