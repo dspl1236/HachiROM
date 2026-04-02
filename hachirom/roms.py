@@ -647,6 +647,12 @@ _MAPS_AAH = [
            "Accel enrichment decay rate vs RPM. Stock: 100→2 (exponential). "
            "Higher value = faster decay.", "raw"),
 
+    # ── MAF linearisation ────────────────────────────────────────────────────
+    MapDef("MAF Linearization",     0x02D0,  1, 64,
+           "MAF sensor linearisation table. 64 entries, 16-bit big-endian. "
+           "Same table as 266D/266B — shared across all Hitachi ECU variants.", "airflow",
+           word_size=2),
+
     # ── Scalars ──────────────────────────────────────────────────────────────
     MapDef("Injection Scaler",      0x077E,  1,  1,
            "Global injector scaler. Stock=100. Raise for larger injectors.", "raw"),
