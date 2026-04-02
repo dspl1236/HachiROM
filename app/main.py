@@ -617,9 +617,12 @@ class MapTab(QWidget):
                               for k in ("timing", "knock"))
 
         addr, rows, cols = map_def.address, map_def.rows, map_def.cols
+        ws = getattr(map_def, 'word_size', 1)
 
         def _read(r, c):
-            off = addr + r * cols + c
+            off = addr + (r * cols + c) * ws
+            if ws == 2 and off + 1 < len(rom_snapshot):
+                return (rom_snapshot[off] << 8) | rom_snapshot[off + 1]
             return rom_snapshot[off] if off < len(rom_snapshot) else 0
 
         # Both grids are independent in-memory copies — nothing is written back
@@ -736,16 +739,18 @@ class MapTab(QWidget):
             # Accept "+15°", "-5°", "15°", "15" etc.
             clean = text.strip().rstrip("°").strip()
             v = float(clean)
+            ws = getattr(self.map_def, 'word_size', 1)
+            max_val = 65535 if ws == 2 else 255
             if self.map_def.encode:
                 raw = self.map_def.encode(v)
-                return max(0, min(255, int(round(raw)) & 0xFF))
+                return max(0, min(max_val, int(round(raw))))
             if self._is_timing:
                 iv = int(round(v))
                 return iv & 0xFF  # two's complement
             iv = int(v)
             if iv < 0:
-                iv = iv & 0xFF
-            return max(0, min(255, iv))
+                iv = iv & (0xFFFF if ws == 2 else 0xFF)
+            return max(0, min(max_val, iv))
         except (ValueError, TypeError):
             return None
 
@@ -809,11 +814,18 @@ class MapTab(QWidget):
         """Return {rom_offset: byte} for every cell that differs from baseline.
         Nothing is written anywhere — caller assembles the full ROM on save."""
         addr, rows, cols = self.map_def.address, self.map_def.rows, self.map_def.cols
+        ws = getattr(self.map_def, 'word_size', 1)
         patch = {}
         for r in range(rows):
             for c in range(cols):
                 if self._local[r][c] != self._baseline[r][c]:
-                    patch[addr + r * cols + c] = self._local[r][c]
+                    off = addr + (r * cols + c) * ws
+                    if ws == 2:
+                        val = self._local[r][c]
+                        patch[off]     = (val >> 8) & 0xFF
+                        patch[off + 1] = val & 0xFF
+                    else:
+                        patch[off] = self._local[r][c]
         return patch
 
     def changed_count(self) -> int:
@@ -2377,15 +2389,17 @@ _MAP_TIPS: dict[str, dict] = {
                    "it rescales both scaler and map in one operation.",
     },
     "MAF Linearization": {
-        "what":  "266B only. Lookup table that converts raw MAF sensor counts "
-                 "to airflow. 64 × 16-bit big-endian entries.",
+        "what":  "Lookup table that converts raw MAF sensor ADC counts "
+                 "to internal airflow units. 64 entries, 16-bit big-endian. "
+                 "Used by both 266D and 266B.",
         "tips": [
             "This is a sensor characterisation table, not a tuning map.",
             "Only edit this if fitting a different MAF sensor body.",
-            "Incorrect values cause systematic fuelling error across all RPM.",
+            "For a 74mm (AAH V6) housing, scale all values by ~1.30×.",
+            "034 Motorsport used this approach for their NA Big MAF calibration.",
         ],
-        "caution": "Errors here affect every single fuel calculation. "
-                   "Only modify if you have airflow bench data for the new sensor.",
+        "caution": "Errors here affect every single fuel calculation. Only "
+                   "modify with bench data or a known-good scaling factor.",
     },
     "RPM Axis (Fuel)": {
         "what":  "The 16 RPM breakpoints that define the columns of the fuel map. "

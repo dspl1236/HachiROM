@@ -384,10 +384,11 @@ class MapDef:
     load_axis:  list = field(default_factory=list)
     decode:     Optional[Callable] = field(default=None, repr=False)
     encode:     Optional[Callable] = field(default=None, repr=False)
+    word_size:  int = 1    # bytes per cell: 1 = uint8, 2 = uint16 BE
 
     @property
     def size(self) -> int:
-        return self.rows * self.cols
+        return self.rows * self.cols * self.word_size
 
     @property
     def is_2d(self) -> bool:
@@ -463,6 +464,16 @@ _MAPS_266D = [
            "Accel enrichment decay rate vs RPM. Exponential taper 100→2. "
            "Higher = faster decay.", "raw"),
 
+    # ── MAF linearisation ────────────────────────────────────────────────────
+    # Both 266D and 266B share the same 64-entry table at 0x02D0.
+    # Converts raw MAF ADC counts to internal airflow units.
+    # For big MAF housing swaps, scale by bore area ratio (~1.30× for 74mm).
+    MapDef("MAF Linearization",     0x02D0,  1, 64,
+           "MAF sensor linearisation table. 64 entries, 16-bit big-endian. "
+           "Converts MAF ADC voltage to internal airflow units. "
+           "Scale by ~1.30× for 74mm (AAH V6) housing.", "airflow",
+           word_size=2),
+
     # ── Closed loop / O2 ────────────────────────────────────────────────────
     MapDef("CL Load Threshold",     0x0660,  1, 16,
            "Load above which closed loop is disabled, per RPM. raw×0.3922=kPa.", "kPa"),
@@ -529,12 +540,13 @@ _MAPS_266B = [
     MapDef("Idle Ignition Trim",    0x02A0,  1, 16,
            "Idle timing correction vs coolant temp. Signed byte (deg).", "deg"),
 
-    # ── MAF linearisation (266B only) ───────────────────────────────────────
-    # 266D uses MAF ADC counts directly against the axis table (no linearisation
-    # lookup needed — the axis bytes ARE the voltage-to-load mapping).
+    # ── MAF linearisation ────────────────────────────────────────────────────
+    # Both 266D and 266B share the same table at 0x02D0.
     MapDef("MAF Linearization",     0x02D0,  1, 64,
-           "MAF sensor linearisation table. 64×16-bit big-endian values. "
-           "266B only — 266D uses MAF axis bytes directly without a linearisation table.", "raw"),
+           "MAF sensor linearisation table. 64 entries, 16-bit big-endian. "
+           "Converts MAF ADC voltage to internal airflow units. "
+           "Scale by ~1.30× for 74mm (AAH V6) housing.", "airflow",
+           word_size=2),
 
     # ── Accel enrichment ─────────────────────────────────────────────────────
     MapDef("Accel Enrichment",      0x0400,  1, 16,
